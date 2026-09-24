@@ -133,10 +133,13 @@ All equations, search queries, and parameter sweeps remain live and continuously
 13. **Interactive Digital Filter Designer (Z-Domain & Audio DSP)**
     - Direct manipulation Z-domain pole-zero unit circle canvas: draggable conjugate pole pair (`X` in coral) and zeros (`O` in cyan).
     - Direct physical mapping: moving poles inside the unit disc interactively recalculates cutoff frequency $f_c$ and resonance $Q$.
-    - Live theoretical frequency response curve $|H(e^{j\omega})|$ in decibels ($-60\text{ dB} \dots +18\text{ dB}$) with $-3\text{ dB}$ cutoff line and hover frequency/gain crosshair.
+    - **Higher Pole Count Filters**: Segmented controls for **2-Pole (12 dB/oct)**, **4-Pole (24 dB/oct)**, **6-Pole (36 dB/oct)**, and **8-Pole (48 dB/oct)** cascaded Butterworth biquad and SVF topologies.
+    - **Self-Oscillation Mode**: Toggle enabling direct placement of poles in the unstable / marginal region ($|z| \ge 1.0$) with amber warning halo styling and extended $Q \in [0.1, 60.0]$.
+    - **Soft Saturation (`tanh`) Limit Cycles**: Optional feedback waveshaping that bounds exponential divergence into stable, warm audio self-oscillations.
+    - Live theoretical frequency response curve $|H(e^{j\omega})|$ in decibels ($-80\text{ dB} \dots +24\text{ dB}$) with $-3\text{ dB}$ cutoff line and hover frequency/gain crosshair displaying multi-pole roll-off steepness.
     - Dual filter architectures:
-      - Direct Form II 2nd-order Biquad (RBJ Audio Cookbook coefficients $b_0, b_1, b_2, a_1, a_2$).
-      - Chamberlin State Variable Filter (SVF) with live damping and resonance parameters.
+      - Cascaded Direct Form II Biquads (RBJ Audio Cookbook coefficients $b_0, b_1, b_2, a_1, a_2$ per stage).
+      - Cascaded Chamberlin State Variable Filters (SVF) with live damping and resonance parameters.
     - Stimulus signal selector: Impulse $\delta[n]$, Unit Step $u[n]$, Sine + High-Frequency Noise, Chirp Frequency Sweep, and Square Wave Train.
     - Continuous live document link: dynamically injects synthesized difference equations and parameters into the live simulation workspace with zero-latency preview.
 

@@ -259,6 +259,26 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
             let v = eval_expr(&args[0], ctx)?;
             Ok(v.tan())
         }
+        "tanh" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            Ok(v.tanh())
+        }
+        "sinh" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            Ok(v.sinh())
+        }
+        "cosh" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            Ok(v.cosh())
+        }
+        "atan" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            Ok(v.atan())
+        }
         "exp" => {
             check_arg_count(func, args, 1)?;
             let v = eval_expr(&args[0], ctx)?;

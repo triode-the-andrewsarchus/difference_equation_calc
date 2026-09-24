@@ -583,3 +583,173 @@ fn test_notch_filter_preset_simulation() {
     assert!(sim.failure.is_none());
     assert!(sim.series.contains_key("y"));
 }
+
+// 18. Higher pole count cascade filter frequency response & poles
+#[test]
+fn test_cascade_filter_higher_poles() {
+    use difference_equation_calc::filter::{CascadeFilter, FilterType};
+    use std::f64::consts::PI;
+
+    for pole_count in [2, 4, 6, 8] {
+        let cascade = CascadeFilter::new(FilterType::Lowpass, pole_count, 0.08, 0.707, false);
+        assert_eq!(cascade.pole_count, pole_count);
+        assert_eq!(cascade.stages.len(), pole_count / 2);
+
+        let poles = cascade.all_poles();
+        assert_eq!(poles.len(), pole_count / 2);
+        assert!(
+            cascade.max_pole_mag() < 1.0,
+            "Stable cascade poles must lie inside unit circle"
+        );
+
+        // DC gain should be close to 0 dB
+        let (dc_db, _) = cascade.eval_frequency_response(0.0001);
+        assert!(
+            (dc_db - 0.0).abs() < 0.5,
+            "DC gain should be ~0 dB, got {}",
+            dc_db
+        );
+    }
+
+    // Compare roll-off slope at 2 octaves above cutoff (f = 0.32 vs fc = 0.08)
+    let c2 = CascadeFilter::new(FilterType::Lowpass, 2, 0.08, 0.707, false);
+    let c4 = CascadeFilter::new(FilterType::Lowpass, 4, 0.08, 0.707, false);
+    let c8 = CascadeFilter::new(FilterType::Lowpass, 8, 0.08, 0.707, false);
+
+    let (gain2, _) = c2.eval_frequency_response(2.0 * PI * 0.32);
+    let (gain4, _) = c4.eval_frequency_response(2.0 * PI * 0.32);
+    let (gain8, _) = c8.eval_frequency_response(2.0 * PI * 0.32);
+
+    // 8-pole must attenuate significantly steeper than 4-pole, which attenuates steeper than 2-pole
+    assert!(
+        gain4 < gain2 - 15.0,
+        "4-pole should attenuate at least 15 dB more than 2-pole at 4*fc: {} vs {}",
+        gain4,
+        gain2
+    );
+    assert!(
+        gain8 < gain4 - 20.0,
+        "8-pole should attenuate at least 20 dB more than 4-pole at 4*fc: {} vs {}",
+        gain8,
+        gain4
+    );
+}
+
+// 19. Self-oscillation pole mapping and coefficient synthesis
+#[test]
+fn test_self_oscillation_mode() {
+    use difference_equation_calc::filter::{pole_to_fc_q_ext, BiquadCoeffs, FilterType};
+
+    // When allow_self_osc is false, max radius is strictly capped < 1.0
+    let (_fc, q) = pole_to_fc_q_ext(0.8, 0.6, false); // mag = 1.0
+    assert!(q <= 25.0);
+
+    // When allow_self_osc is true, radius can reach into unstable region (r >= 1.0)
+    let (fc_osc, q_osc) = pole_to_fc_q_ext(0.85, 0.65, true); // mag = 1.07
+    assert!(
+        q_osc > 25.0,
+        "Expected Q in self-oscillation region (> 25.0), got {}",
+        q_osc
+    );
+    assert!((fc_osc - 0.10).abs() < 0.05);
+
+    // Biquad synthesis with allow_self_osc produces pole magnitude >= 1.0
+    let coeffs = BiquadCoeffs::from_filter_params_ext(FilterType::Lowpass, 0.10, 40.0, true);
+    let (p1, p2) = coeffs.poles();
+    assert!(
+        p1.mag() >= 1.0,
+        "Self-oscillating biquad pole magnitude must be >= 1.0, got {}",
+        p1.mag()
+    );
+    assert!(p2.mag() >= 1.0);
+    assert!(
+        coeffs.a2 >= 1.0,
+        "Feedback coefficient a2 must be >= 1.0 for self-oscillation, got {}",
+        coeffs.a2
+    );
+}
+
+// 20. Cascade biquad document generation and simulation with soft saturation
+#[test]
+fn test_cascade_biquad_document_simulation() {
+    use difference_equation_calc::filter::{create_cascade_biquad_doc, FilterType, StimulusType};
+    use difference_equation_calc::sim::run_simulation;
+
+    // 4-pole cascade with self-oscillation and soft saturation (tanh)
+    let doc = create_cascade_biquad_doc(
+        FilterType::Lowpass,
+        4,
+        0.05,
+        40.0,
+        StimulusType::Impulse,
+        true,
+        true,
+    );
+
+    let (eqs, errors) = doc.get_parsed_equations();
+    assert!(
+        errors.is_empty(),
+        "4-pole cascade biquad equations parse error: {:?}",
+        errors
+    );
+
+    let params = doc.get_parameters_map();
+    let sim = run_simulation(&eqs, &doc.initial_conditions, &params, 100)
+        .expect("Simulation of 4-pole cascade biquad failed");
+
+    assert!(
+        sim.failure.is_none(),
+        "Cascade biquad simulation failure: {:?}",
+        sim.failure
+    );
+    assert!(sim.series.contains_key("x"));
+    assert!(sim.series.contains_key("y1"));
+    assert!(sim.series.contains_key("y"));
+
+    let y_vals = &sim.series.get("y").unwrap().values;
+    assert_eq!(y_vals.len(), 100);
+    for v in y_vals {
+        assert!(v.is_finite());
+        // Because of tanh saturation, values should stay comfortably bounded
+        assert!(
+            v.abs() <= 5.0,
+            "Soft saturation should bound output, got {}",
+            v
+        );
+    }
+}
+
+// 21. Cascade SVF document generation and simulation
+#[test]
+fn test_cascade_svf_document_simulation() {
+    use difference_equation_calc::filter::{create_cascade_svf_doc, StimulusType};
+    use difference_equation_calc::sim::run_simulation;
+
+    // 4-pole SVF with self-oscillation and soft saturation
+    let doc = create_cascade_svf_doc(4, 0.08, 35.0, StimulusType::Step, true, true);
+
+    let (eqs, errors) = doc.get_parsed_equations();
+    assert!(
+        errors.is_empty(),
+        "4-pole SVF equations parse error: {:?}",
+        errors
+    );
+
+    let params = doc.get_parameters_map();
+    let sim = run_simulation(&eqs, &doc.initial_conditions, &params, 100)
+        .expect("Simulation of 4-pole SVF failed");
+
+    assert!(
+        sim.failure.is_none(),
+        "Cascade SVF simulation failure: {:?}",
+        sim.failure
+    );
+    assert!(sim.series.contains_key("lp1"));
+    assert!(sim.series.contains_key("lp"));
+
+    let lp_vals = &sim.series.get("lp").unwrap().values;
+    assert_eq!(lp_vals.len(), 100);
+    for v in lp_vals {
+        assert!(v.is_finite());
+    }
+}

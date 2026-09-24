@@ -1,15 +1,15 @@
 use crate::document::Document;
-use crate::filter::{pole_to_fc_q, BiquadCoeffs, Complex, FilterEngine, FilterType, StimulusType};
+use crate::filter::{
+    pole_to_fc_q_ext, CascadeFilter, Complex, FilterEngine, FilterType, StimulusType,
+};
 use crate::ui::icons::Icon;
 use egui::{epaint::PathShape, pos2, vec2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::f64::consts::PI;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragTarget {
-    Pole1,
-    Pole2,
-    Zero1,
-    Zero2,
+    Pole,
+    Zero,
 }
 
 #[derive(Debug, Clone)]
@@ -18,6 +18,9 @@ pub struct FilterDesignerState {
     pub engine: FilterEngine,
     pub filter_type: FilterType,
     pub stimulus: StimulusType,
+    pub pole_count: usize,
+    pub allow_self_oscillation: bool,
+    pub soft_saturation: bool,
     pub fc: f64,
     pub q: f64,
     pub sample_rate: f64,
@@ -32,6 +35,9 @@ impl Default for FilterDesignerState {
             engine: FilterEngine::BiquadDirectForm2,
             filter_type: FilterType::Lowpass,
             stimulus: StimulusType::Step,
+            pole_count: 2,
+            allow_self_oscillation: false,
+            soft_saturation: false,
             fc: 0.10,
             q: 2.5,
             sample_rate: 48000.0,
@@ -62,13 +68,13 @@ pub fn render_filter_designer_window(
     egui::Window::new("Digital Filter Designer")
         .open(&mut is_open)
         .resizable(true)
-        .default_size(vec2(720.0, 530.0))
-        .min_size(vec2(600.0, 460.0))
-        .max_size(vec2(1200.0, 800.0))
+        .default_size(vec2(740.0, 560.0))
+        .min_size(vec2(620.0, 480.0))
+        .max_size(vec2(1200.0, 850.0))
         .show(ctx, |ui| {
             let mut state_changed = false;
 
-            // Top Bar: Filter Type & Architecture
+            // Row 1: Filter Type & Architecture
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Filter:").strong());
                 for ft in FilterType::ALL {
@@ -90,7 +96,7 @@ pub fn render_filter_designer_window(
                 let is_biquad = state.engine == FilterEngine::BiquadDirectForm2;
                 if ui
                     .selectable_label(is_biquad, "Biquad DF2")
-                    .on_hover_text("Direct Form II 2nd-order difference equation with 5 parameters")
+                    .on_hover_text("Direct Form II cascaded biquad difference equations")
                     .clicked()
                     && !is_biquad
                 {
@@ -111,7 +117,53 @@ pub fn render_filter_designer_window(
 
             ui.separator();
 
-            // Row with Stimulus and Controls
+            // Row 2: Pole Count & Self-Oscillation Controls
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Poles:").strong());
+                for p in [2, 4, 6, 8] {
+                    let is_active = state.pole_count == p;
+                    let label = format!("{}-Pole ({}dB)", p, p * 6);
+                    if ui
+                        .selectable_label(is_active, label)
+                        .on_hover_text(format!(
+                            "Order {} ({} cascaded stages, {} dB/octave roll-off)",
+                            p,
+                            p / 2,
+                            p * 6
+                        ))
+                        .clicked()
+                        && !is_active
+                    {
+                        state.pole_count = p;
+                        state_changed = true;
+                    }
+                }
+
+                ui.separator();
+
+                if ui
+                    .checkbox(
+                        &mut state.allow_self_oscillation,
+                        "Self-Oscillation (|z| ≥ 1.0)",
+                    )
+                    .on_hover_text("Allow poles to move on/outside the unit circle for negative damping and autonomous limit cycles")
+                    .changed()
+                {
+                    state_changed = true;
+                }
+
+                if ui
+                    .checkbox(&mut state.soft_saturation, "Soft Saturation (tanh)")
+                    .on_hover_text("Wrap feedback in tanh non-linearity to stabilize self-oscillation into a non-exploding limit cycle")
+                    .changed()
+                {
+                    state_changed = true;
+                }
+            });
+
+            ui.separator();
+
+            // Row 3: Stimulus and Live Link
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Stimulus:").strong());
                 for stim in StimulusType::ALL {
@@ -141,12 +193,15 @@ pub fn render_filter_designer_window(
 
             ui.add_space(4.0);
 
-            // Compute coefficients, poles, and zeros
-            let coeffs = BiquadCoeffs::from_filter_params(state.filter_type, state.fc, state.q);
-            let (pole1, pole2) = coeffs.poles();
-            let (zero1, zero2) = coeffs.zeros();
-            let pole_mag = pole1.mag().max(pole2.mag());
-            let is_stable = pole_mag < 1.0;
+            // Compute cascade filter
+            let cascade = CascadeFilter::new(
+                state.filter_type,
+                state.pole_count,
+                state.fc,
+                state.q,
+                state.allow_self_oscillation,
+            );
+            let max_pole_mag = cascade.max_pole_mag();
 
             // Interactive Graphics Area: Z-Plane (Left) and Bode Plot (Right) using bounded columns
             let canvas_h = 240.0;
@@ -155,19 +210,19 @@ pub fn render_filter_designer_window(
                 let col0 = &mut cols[0];
                 let col0_w = col0.available_width();
                 col0.label(
-                    egui::RichText::new("Z-Domain Pole-Zero Complex Plane")
-                        .size(11.0)
-                        .color(Color32::from_rgb(180, 200, 230)),
+                    egui::RichText::new(format!(
+                        "Z-Domain Pole-Zero Plane ({}-Pole, max |z| = {:.3})",
+                        state.pole_count, max_pole_mag
+                    ))
+                    .size(11.0)
+                    .color(Color32::from_rgb(180, 200, 230)),
                 );
 
                 let z_changed = render_zplane_canvas(
                     col0,
                     vec2(col0_w, canvas_h - 18.0),
                     state,
-                    pole1,
-                    pole2,
-                    zero1,
-                    zero2,
+                    &cascade,
                 );
                 if z_changed {
                     state_changed = true;
@@ -179,8 +234,9 @@ pub fn render_filter_designer_window(
                 let hz = state.fc * state.sample_rate;
                 col1.label(
                     egui::RichText::new(format!(
-                        "Magnitude Response |H(e^jω)| (Cutoff: {:.4} / {:.0} Hz)",
-                        state.fc, hz
+                        "Magnitude Response ({} dB/oct, Cutoff: {:.0} Hz)",
+                        state.pole_count * 6,
+                        hz
                     ))
                     .size(11.0)
                     .color(Color32::from_rgb(180, 200, 230)),
@@ -189,7 +245,7 @@ pub fn render_filter_designer_window(
                 render_bode_plot_canvas(
                     col1,
                     vec2(col1_w, canvas_h - 18.0),
-                    &coeffs,
+                    &cascade,
                     state.fc,
                     state.sample_rate,
                 );
@@ -222,7 +278,14 @@ pub fn render_filter_designer_window(
 
                     // Q / Resonance factor slider
                     ui.horizontal(|ui| {
-                        let q_desc = if (state.q - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.05 {
+                        let q_max = if state.allow_self_oscillation {
+                            60.0
+                        } else {
+                            25.0
+                        };
+                        let q_desc = if max_pole_mag >= 1.0 {
+                            "Self-Oscillation (|z| ≥ 1.0)"
+                        } else if (state.q - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.05 {
                             "Butterworth (flat)"
                         } else if state.q > 5.0 {
                             "High Resonance"
@@ -236,11 +299,11 @@ pub fn render_filter_designer_window(
                         let mut q = state.q;
                         if ui
                             .add(
-                                egui::Slider::new(&mut q, 0.2..=25.0)
+                                egui::Slider::new(&mut q, 0.2..=q_max)
                                     .logarithmic(true)
                                     .text(q_desc),
                             )
-                            .on_hover_text("Filter quality factor Q (resonance)")
+                            .on_hover_text("Filter quality factor Q (resonance factor)")
                             .changed()
                         {
                             state.q = q;
@@ -254,15 +317,21 @@ pub fn render_filter_designer_window(
                 // Coefficients readout & Stability Status
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        let status_text = if is_stable {
-                            format!("STABLE (max |z| = {:.3} < 1.0)", pole_mag)
+                        let (status_text, status_color) = if max_pole_mag < 0.999 {
+                            (
+                                format!("STABLE (max |z| = {:.3} < 1.0)", max_pole_mag),
+                                Color32::from_rgb(80, 240, 140),
+                            )
+                        } else if max_pole_mag <= 1.002 {
+                            (
+                                format!("SELF-OSCILLATING / MARGINAL (|z| = {:.3})", max_pole_mag),
+                                Color32::from_rgb(255, 200, 50),
+                            )
                         } else {
-                            format!("UNSTABLE (max |z| = {:.3} >= 1.0)", pole_mag)
-                        };
-                        let status_color = if is_stable {
-                            Color32::from_rgb(80, 240, 140)
-                        } else {
-                            Color32::from_rgb(255, 90, 90)
+                            (
+                                format!("UNSTABLE / GROWING (max |z| = {:.3} ≥ 1.0)", max_pole_mag),
+                                Color32::from_rgb(255, 80, 80),
+                            )
                         };
 
                         ui.label("Stability:");
@@ -275,22 +344,41 @@ pub fn render_filter_designer_window(
 
                     match state.engine {
                         FilterEngine::BiquadDirectForm2 => {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "b0: {:+.4}   b1: {:+.4}   b2: {:+.4}\na1: {:+.4}   a2: {:+.4}",
-                                    coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2
-                                ))
-                                .monospace()
-                                .size(11.0)
-                                .color(Color32::from_rgb(190, 200, 220)),
-                            );
+                            if cascade.stages.len() == 1 {
+                                let c = &cascade.stages[0];
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "b0: {:+.4}   b1: {:+.4}   b2: {:+.4}\na1: {:+.4}   a2: {:+.4}",
+                                        c.b0, c.b1, c.b2, c.a1, c.a2
+                                    ))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(190, 200, 220)),
+                                );
+                            } else {
+                                let c1 = &cascade.stages[0];
+                                let c_last = cascade.stages.last().unwrap();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Stage 1: a1: {:+.4}, a2: {:+.4}\nStage {}: a1: {:+.4}, a2: {:+.4}",
+                                        c1.a1, c1.a2, cascade.stages.len(), c_last.a1, c_last.a2
+                                    ))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(190, 200, 220)),
+                                );
+                            }
                         }
                         FilterEngine::ChamberlinSvf => {
                             let f_val = 2.0 * (PI * state.fc.clamp(0.01, 0.45)).sin();
-                            let q_damp = 1.0 / state.q.clamp(0.2, 20.0);
+                            let q_damp = if state.allow_self_oscillation && state.q >= 25.0 {
+                                -(state.q - 25.0) * 0.015
+                            } else {
+                                1.0 / state.q.clamp(0.2, 25.0)
+                            };
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "f: {:.4} (2 sin(π fc))\nq: {:.4} (1 / Q damping)",
+                                    "f: {:.4} (2 sin(π fc))\nq: {:.4} (damping; <= 0 oscillates)",
                                     f_val, q_damp
                                 ))
                                 .monospace()
@@ -322,6 +410,9 @@ pub fn render_filter_designer_window(
                 if ui.button("Reset Defaults").clicked() {
                     state.fc = 0.10;
                     state.q = 2.5;
+                    state.pole_count = 2;
+                    state.allow_self_oscillation = false;
+                    state.soft_saturation = false;
                     state_changed = true;
                 }
 
@@ -352,15 +443,23 @@ pub fn render_filter_designer_window(
 
 pub fn apply_filter_to_document(state: &FilterDesignerState, doc: &mut Document) {
     let new_doc_state = match state.engine {
-        FilterEngine::BiquadDirectForm2 => crate::filter::create_biquad_filter_doc(
+        FilterEngine::BiquadDirectForm2 => crate::filter::create_cascade_biquad_doc(
             state.filter_type,
+            state.pole_count,
             state.fc,
             state.q,
             state.stimulus,
+            state.allow_self_oscillation,
+            state.soft_saturation,
         ),
-        FilterEngine::ChamberlinSvf => {
-            crate::filter::create_chamberlin_svf_doc(state.fc, state.q, state.stimulus)
-        }
+        FilterEngine::ChamberlinSvf => crate::filter::create_cascade_svf_doc(
+            state.pole_count,
+            state.fc,
+            state.q,
+            state.stimulus,
+            state.allow_self_oscillation,
+            state.soft_saturation,
+        ),
     };
 
     doc.state.equations = new_doc_state.equations;
@@ -375,10 +474,7 @@ fn render_zplane_canvas(
     ui: &mut Ui,
     size: Vec2,
     state: &mut FilterDesignerState,
-    pole1: Complex,
-    pole2: Complex,
-    zero1: Complex,
-    zero2: Complex,
+    cascade: &CascadeFilter,
 ) -> bool {
     let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
     let rect = response.rect;
@@ -388,7 +484,12 @@ fn render_zplane_canvas(
 
     // Coordinate mapping: center is at rect center, unit circle radius is r_pixels
     let center = rect.center();
-    let r_pixels = (rect.width().min(rect.height()) * 0.40).max(40.0);
+    let max_radius_scale = if state.allow_self_oscillation {
+        0.33
+    } else {
+        0.40
+    };
+    let r_pixels = (rect.width().min(rect.height()) * max_radius_scale).max(35.0);
 
     let to_screen = |z: Complex| -> Pos2 {
         pos2(
@@ -404,6 +505,20 @@ fn render_zplane_canvas(
         )
     };
 
+    // If self-oscillation is allowed, render outer unstable boundary zone
+    if state.allow_self_oscillation {
+        painter.circle_filled(
+            center,
+            r_pixels * 1.25,
+            Color32::from_rgba_unmultiplied(70, 20, 30, 40),
+        );
+        painter.circle_stroke(
+            center,
+            r_pixels * 1.25,
+            Stroke::new(1.0_f32, Color32::from_rgb(120, 45, 55)),
+        );
+    }
+
     // Shaded stable unit disc (|z| < 1)
     painter.circle_filled(
         center,
@@ -414,25 +529,26 @@ fn render_zplane_canvas(
     // Axes
     painter.line_segment(
         [
-            pos2(rect.left() + 10.0, center.y),
-            pos2(rect.right() - 10.0, center.y),
+            pos2(rect.left() + 8.0, center.y),
+            pos2(rect.right() - 8.0, center.y),
         ],
         Stroke::new(1.0_f32, Color32::from_rgb(50, 60, 80)),
     );
     painter.line_segment(
         [
-            pos2(center.x, rect.top() + 10.0),
-            pos2(center.x, rect.bottom() - 10.0),
+            pos2(center.x, rect.top() + 8.0),
+            pos2(center.x, rect.bottom() - 8.0),
         ],
         Stroke::new(1.0_f32, Color32::from_rgb(50, 60, 80)),
     );
 
     // Unit circle boundary (|z| = 1)
-    painter.circle_stroke(
-        center,
-        r_pixels,
-        Stroke::new(1.5_f32, Color32::from_rgb(60, 140, 200)),
-    );
+    let unit_circle_stroke = if state.allow_self_oscillation {
+        Stroke::new(2.0_f32, Color32::from_rgb(255, 170, 70))
+    } else {
+        Stroke::new(1.5_f32, Color32::from_rgb(60, 140, 200))
+    };
+    painter.circle_stroke(center, r_pixels, unit_circle_stroke);
 
     // Half circle (|z| = 0.5)
     painter.circle_stroke(
@@ -472,16 +588,36 @@ fn render_zplane_canvas(
         Color32::from_rgb(120, 140, 170),
     );
 
-    // Draw Zeros as 'O' cyan circles
-    let zero_color = Color32::from_rgb(70, 220, 240);
-    for z in [zero1, zero2] {
-        let p = to_screen(z);
-        painter.circle_stroke(p, 5.0, Stroke::new(2.0_f32, zero_color));
+    if state.allow_self_oscillation {
+        painter.text(
+            pos2(center.x, rect.top() + 6.0),
+            egui::Align2::CENTER_TOP,
+            "OSCILLATION ZONE (|z| >= 1.0)",
+            FontId::monospace(8.0),
+            Color32::from_rgb(255, 140, 90),
+        );
     }
 
-    // Draw Poles as 'X' coral marks
-    let pole_color = Color32::from_rgb(255, 100, 100);
-    let draw_x = |painter: &egui::Painter, pos: Pos2, color: Color32| {
+    // Draw Zeros as 'O' cyan circles
+    let zero_color = Color32::from_rgb(70, 220, 240);
+    for (z1, z2) in cascade.all_zeros() {
+        for z in [z1, z2] {
+            if z != Complex::ZERO {
+                let p = to_screen(z);
+                painter.circle_stroke(p, 5.0, Stroke::new(2.0_f32, zero_color));
+            }
+        }
+    }
+
+    // Helper to draw pole 'X' mark with optional glowing halo for unstable poles
+    let draw_x = |painter: &egui::Painter, pos: Pos2, color: Color32, is_unstable: bool| {
+        if is_unstable {
+            painter.circle_stroke(
+                pos,
+                9.0,
+                Stroke::new(1.5_f32, Color32::from_rgb(255, 70, 70)),
+            );
+        }
         let d = 5.0;
         painter.line_segment(
             [pos2(pos.x - d, pos.y - d), pos2(pos.x + d, pos.y + d)],
@@ -493,10 +629,28 @@ fn render_zplane_canvas(
         );
     };
 
-    let p1_screen = to_screen(pole1);
-    let p2_screen = to_screen(pole2);
-    draw_x(&painter, p1_screen, pole_color);
-    draw_x(&painter, p2_screen, pole_color);
+    // Draw all poles from all stages of the cascade
+    let all_poles = cascade.all_poles();
+    let mut pole_screen_positions = Vec::new();
+
+    for (stage_idx, (p1, p2)) in all_poles.iter().enumerate() {
+        let is_resonant = stage_idx == all_poles.len() - 1;
+        let is_unstable = p1.mag() >= 1.0;
+        let color = if is_unstable {
+            Color32::from_rgb(255, 60, 60)
+        } else if is_resonant {
+            Color32::from_rgb(255, 110, 110)
+        } else {
+            Color32::from_rgb(220, 140, 140)
+        };
+
+        let p1_s = to_screen(*p1);
+        let p2_s = to_screen(*p2);
+        draw_x(&painter, p1_s, color, is_unstable);
+        draw_x(&painter, p2_s, color, is_unstable);
+        pole_screen_positions.push((p1_s, *p1, stage_idx));
+        pole_screen_positions.push((p2_s, *p2, stage_idx));
+    }
 
     // Direct manipulation interaction
     let mut param_changed = false;
@@ -504,44 +658,30 @@ fn render_zplane_canvas(
 
     if response.drag_started() {
         if let Some(pos) = pointer_pos {
-            // Check if clicking near pole1 or pole2
-            if pos.distance(p1_screen) < 14.0 {
-                state.dragging = Some(DragTarget::Pole1);
-            } else if pos.distance(p2_screen) < 14.0 {
-                state.dragging = Some(DragTarget::Pole2);
-            } else if pos.distance(to_screen(zero1)) < 14.0 {
-                state.dragging = Some(DragTarget::Zero1);
-            } else if pos.distance(to_screen(zero2)) < 14.0 {
-                state.dragging = Some(DragTarget::Zero2);
+            // Check if near any pole
+            let near_pole = pole_screen_positions
+                .iter()
+                .any(|(sp, _, _)| pos.distance(*sp) < 14.0);
+            if near_pole {
+                state.dragging = Some(DragTarget::Pole);
             } else {
-                // Clicking anywhere on unit circle moves poles there
                 let z = from_screen(pos);
-                let (fc, q) = pole_to_fc_q(z.re, z.im);
+                let (fc, q) = pole_to_fc_q_ext(z.re, z.im, state.allow_self_oscillation);
                 state.fc = fc;
                 state.q = q;
-                state.dragging = Some(DragTarget::Pole1);
+                state.dragging = Some(DragTarget::Pole);
                 param_changed = true;
             }
         }
     }
 
     if response.dragged() {
-        if let (Some(target), Some(pos)) = (state.dragging, pointer_pos) {
+        if let (Some(DragTarget::Pole), Some(pos)) = (state.dragging, pointer_pos) {
             let z = from_screen(pos);
-            match target {
-                DragTarget::Pole1 | DragTarget::Pole2 => {
-                    let (fc, q) = pole_to_fc_q(z.re, z.im);
-                    state.fc = fc;
-                    state.q = q;
-                    param_changed = true;
-                }
-                DragTarget::Zero1 | DragTarget::Zero2 => {
-                    let theta = z.im.abs().atan2(z.re);
-                    let fc = (theta / (2.0 * PI)).clamp(0.005, 0.495);
-                    state.fc = fc;
-                    param_changed = true;
-                }
-            }
+            let (fc, q) = pole_to_fc_q_ext(z.re, z.im, state.allow_self_oscillation);
+            state.fc = fc;
+            state.q = q;
+            param_changed = true;
         }
     }
 
@@ -551,21 +691,27 @@ fn render_zplane_canvas(
 
     // Tooltip display on hover
     if let Some(pos) = pointer_pos {
-        if pos.distance(p1_screen) < 16.0 || pos.distance(p2_screen) < 16.0 {
-            response.on_hover_text(format!(
-                "Pole z = {:.3} ± {:.3} j\n|z| = {:.3} (Stability: {})\nDrag to adjust Cutoff & Resonance",
-                pole1.re,
-                pole1.im.abs(),
-                pole1.mag(),
-                if pole1.mag() < 1.0 { "Stable" } else { "Unstable" }
-            ));
-        } else if pos.distance(to_screen(zero1)) < 16.0 || pos.distance(to_screen(zero2)) < 16.0 {
-            response.on_hover_text(format!(
-                "Zero z = {:.3} ± {:.3} j\n|z| = {:.3}\nDrag to adjust Notch Center Frequency",
-                zero1.re,
-                zero1.im.abs(),
-                zero1.mag()
-            ));
+        for (sp, p, stage_idx) in &pole_screen_positions {
+            if pos.distance(*sp) < 16.0 {
+                let mag = p.mag();
+                let status_str = if mag < 0.999 {
+                    "Stable"
+                } else if mag <= 1.002 {
+                    "Marginally Stable (Self-Oscillating)"
+                } else {
+                    "Unstable (Exponential Growth)"
+                };
+                response.on_hover_text(format!(
+                    "Pole Stage {}/{}: z = {:.3} ± {:.3} j\n|z| = {:.3} ({})\nDrag to adjust Cutoff & Resonance",
+                    stage_idx + 1,
+                    all_poles.len(),
+                    p.re,
+                    p.im.abs(),
+                    mag,
+                    status_str
+                ));
+                break;
+            }
         }
     }
 
@@ -575,7 +721,7 @@ fn render_zplane_canvas(
 fn render_bode_plot_canvas(
     ui: &mut Ui,
     size: Vec2,
-    coeffs: &BiquadCoeffs,
+    cascade: &CascadeFilter,
     fc: f64,
     sample_rate: f64,
 ) {
@@ -595,8 +741,8 @@ fn render_bode_plot_canvas(
         pos2(rect.right() - margin_right, rect.bottom() - margin_bottom),
     );
 
-    let min_db = -60.0_f64;
-    let max_db = 18.0_f64;
+    let min_db = -80.0_f64;
+    let max_db = 24.0_f64;
 
     let db_to_y = |db: f64| -> f32 {
         let t = ((db - min_db) / (max_db - min_db)).clamp(0.0, 1.0) as f32;
@@ -610,7 +756,7 @@ fn render_bode_plot_canvas(
 
     // Horizontal dB grid lines
     let font_id = FontId::monospace(8.5);
-    for db in [-60.0, -40.0, -20.0, -3.0, 0.0, 12.0] {
+    for db in [-80.0, -60.0, -40.0, -20.0, -3.0, 0.0, 12.0] {
         let y = db_to_y(db);
         let stroke = if db == 0.0 {
             Stroke::new(1.2_f32, Color32::from_rgb(90, 110, 140))
@@ -660,7 +806,7 @@ fn render_bode_plot_canvas(
     for i in 0..num_points {
         let f_norm = (i as f64 / (num_points - 1) as f64) * 0.50;
         let omega = 2.0 * PI * f_norm;
-        let (mag_db, _) = coeffs.eval_frequency_response(omega);
+        let (mag_db, _) = cascade.eval_frequency_response(omega);
 
         let x = norm_f_to_x(f_norm);
         let y = db_to_y(mag_db);
@@ -689,7 +835,7 @@ fn render_bode_plot_canvas(
 
     // Cutoff frequency indicator marker
     let fc_x = norm_f_to_x(fc);
-    let (fc_db, _) = coeffs.eval_frequency_response(2.0 * PI * fc);
+    let (fc_db, _) = cascade.eval_frequency_response(2.0 * PI * fc);
     let fc_y = db_to_y(fc_db);
 
     painter.line_segment(
@@ -704,7 +850,7 @@ fn render_bode_plot_canvas(
         if plot_rect.contains(pos) {
             let t = ((pos.x - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0) as f64;
             let hover_f = t * 0.50;
-            let (hover_db, _) = coeffs.eval_frequency_response(2.0 * PI * hover_f);
+            let (hover_db, _) = cascade.eval_frequency_response(2.0 * PI * hover_f);
             let hover_y = db_to_y(hover_db);
 
             // Crosshair
@@ -718,10 +864,11 @@ fn render_bode_plot_canvas(
             painter.circle_filled(pos2(pos.x, hover_y), 3.5, Color32::from_rgb(255, 255, 255));
 
             response.on_hover_text(format!(
-                "Freq: {:.4} ({:.1} Hz)\nGain: {:+.2} dB",
+                "Freq: {:.4} ({:.1} Hz)\nGain: {:+.2} dB ({} Poles)",
                 hover_f,
                 hover_f * sample_rate,
-                hover_db
+                hover_db,
+                cascade.pole_count
             ));
         }
     }
