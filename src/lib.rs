@@ -2,6 +2,7 @@ pub mod ast;
 pub mod deps;
 pub mod document;
 pub mod eval;
+pub mod filter;
 pub mod lexer;
 pub mod measure;
 pub mod parser;

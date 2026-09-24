@@ -453,3 +453,133 @@ fn test_attractor_bifurcation_sweep() {
         "Logistic map values should stay <= 1.0"
     );
 }
+
+// 14. Biquad filter coefficient calculation & frequency response
+#[test]
+fn test_biquad_coefficients_and_frequency_response() {
+    use difference_equation_calc::filter::{BiquadCoeffs, FilterType};
+    use std::f64::consts::PI;
+
+    // Test Lowpass
+    let lp = BiquadCoeffs::from_filter_params(FilterType::Lowpass, 0.10, 2.0);
+    let (dc_gain_db, _) = lp.eval_frequency_response(0.0001);
+    let (nyquist_gain_db, _) = lp.eval_frequency_response(PI);
+    assert!(
+        (dc_gain_db - 0.0).abs() < 0.2,
+        "Lowpass DC gain should be close to 0 dB, got {}",
+        dc_gain_db
+    );
+    assert!(
+        nyquist_gain_db < -20.0,
+        "Lowpass gain at Nyquist should be strongly attenuated, got {}",
+        nyquist_gain_db
+    );
+
+    // Test Highpass
+    let hp = BiquadCoeffs::from_filter_params(FilterType::Highpass, 0.10, 2.0);
+    let (hp_dc_db, _) = hp.eval_frequency_response(0.0001);
+    let (hp_nyquist_db, _) = hp.eval_frequency_response(PI);
+    assert!(
+        hp_dc_db < -20.0,
+        "Highpass DC gain should be strongly attenuated, got {}",
+        hp_dc_db
+    );
+    assert!(
+        (hp_nyquist_db - 0.0).abs() < 0.2,
+        "Highpass Nyquist gain should be close to 0 dB, got {}",
+        hp_nyquist_db
+    );
+
+    // Test Notch Filter: deep null at center frequency
+    let fc = 0.15;
+    let notch = BiquadCoeffs::from_filter_params(FilterType::Notch, fc, 8.0);
+    let (notch_null_db, _) = notch.eval_frequency_response(2.0 * PI * fc);
+    assert!(
+        notch_null_db < -35.0,
+        "Notch should have deep null at center frequency, got {} dB",
+        notch_null_db
+    );
+
+    // Test Poles stability
+    let (p1, p2) = lp.poles();
+    assert!(
+        p1.mag() < 1.0 && p2.mag() < 1.0,
+        "Biquad poles must lie strictly inside the unit circle for stability"
+    );
+}
+
+// 15. Chamberlin SVF Preset Simulation
+#[test]
+fn test_chamberlin_svf_preset_simulation() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    use difference_equation_calc::sim::run_simulation;
+
+    let preset = get_preset_by_kind(PresetKind::ChamberlinSvf);
+    let state = (preset.state_builder)();
+    let (eqs, errors) = state.get_parsed_equations();
+    assert!(
+        errors.is_empty(),
+        "Chamberlin SVF equations failed to parse: {:?}",
+        errors
+    );
+
+    let params = state.get_parameters_map();
+    let sim = run_simulation(&eqs, &state.initial_conditions, &params, state.sample_count)
+        .expect("Simulation of Chamberlin SVF failed");
+
+    assert!(sim.failure.is_none());
+    assert!(sim.series.contains_key("lp"));
+    assert!(sim.series.contains_key("hp"));
+    assert!(sim.series.contains_key("bp"));
+
+    let lp_vals = &sim.series.get("lp").unwrap().values;
+    assert_eq!(lp_vals.len(), state.sample_count);
+    for v in lp_vals {
+        assert!(v.is_finite(), "Simulation produced non-finite values");
+    }
+}
+
+// 16. Resonant Biquad Preset Simulation
+#[test]
+fn test_resonant_biquad_preset_simulation() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    use difference_equation_calc::sim::run_simulation;
+
+    let preset = get_preset_by_kind(PresetKind::ResonantBiquad);
+    let state = (preset.state_builder)();
+    let (eqs, errors) = state.get_parsed_equations();
+    assert!(errors.is_empty(), "Resonant biquad equations parse error");
+
+    let params = state.get_parameters_map();
+    let sim = run_simulation(&eqs, &state.initial_conditions, &params, state.sample_count)
+        .expect("Simulation of Resonant Biquad failed");
+
+    assert!(sim.failure.is_none());
+    assert!(sim.series.contains_key("x"));
+    assert!(sim.series.contains_key("y"));
+
+    let y_vals = &sim.series.get("y").unwrap().values;
+    assert_eq!(y_vals.len(), state.sample_count);
+    for v in y_vals {
+        assert!(v.is_finite());
+    }
+}
+
+// 17. Notch Filter Preset Simulation
+#[test]
+fn test_notch_filter_preset_simulation() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    use difference_equation_calc::sim::run_simulation;
+
+    let preset = get_preset_by_kind(PresetKind::NotchFilter);
+    let state = (preset.state_builder)();
+    let (eqs, errors) = state.get_parsed_equations();
+    assert!(errors.is_empty(), "Notch filter equations parse error");
+
+    let params = state.get_parameters_map();
+    let sim = run_simulation(&eqs, &state.initial_conditions, &params, state.sample_count)
+        .expect("Simulation of Notch Filter failed");
+
+    assert!(sim.failure.is_none());
+    assert!(sim.series.contains_key("y"));
+}

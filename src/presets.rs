@@ -11,6 +11,9 @@ pub enum PresetKind {
     HenonMap,
     LotkaVolterra,
     PidController,
+    ChamberlinSvf,
+    ResonantBiquad,
+    NotchFilter,
 }
 
 pub struct PresetSystem {
@@ -65,6 +68,29 @@ pub const ALL_PRESETS: &[PresetSystem] = &[
         description: "Proportional-integral-derivative closed-loop target tracking and damping.",
         state_builder: pid_controller_preset,
         default_phase_pair: ("pos", "vel"),
+    },
+    PresetSystem {
+        kind: PresetKind::ChamberlinSvf,
+        name: "Chamberlin State Variable Filter (SVF)",
+        description:
+            "Simultaneous Lowpass, Bandpass, and Highpass outputs with live resonance damping.",
+        state_builder: chamberlin_svf_preset,
+        default_phase_pair: ("lp", "bp"),
+    },
+    PresetSystem {
+        kind: PresetKind::ResonantBiquad,
+        name: "Resonant Biquad Lowpass (Direct Form II)",
+        description:
+            "2nd-order audio biquad showing step response overshoot, ringing, and cutoffs.",
+        state_builder: resonant_biquad_preset,
+        default_phase_pair: ("x", "y"),
+    },
+    PresetSystem {
+        kind: PresetKind::NotchFilter,
+        name: "Notch Filter (Interference Rejection)",
+        description: "Zero-pair on the unit circle eliminating interfering frequency components.",
+        state_builder: notch_filter_preset,
+        default_phase_pair: ("x", "y"),
     },
 ];
 
@@ -385,4 +411,26 @@ fn pid_controller_preset() -> DocumentState {
             steps: 120,
         },
     }
+}
+
+fn chamberlin_svf_preset() -> DocumentState {
+    crate::filter::create_chamberlin_svf_doc(0.08, 4.0, crate::filter::StimulusType::Step)
+}
+
+fn resonant_biquad_preset() -> DocumentState {
+    crate::filter::create_biquad_filter_doc(
+        crate::filter::FilterType::Lowpass,
+        0.10,
+        2.5,
+        crate::filter::StimulusType::Step,
+    )
+}
+
+fn notch_filter_preset() -> DocumentState {
+    crate::filter::create_biquad_filter_doc(
+        crate::filter::FilterType::Notch,
+        0.15,
+        6.0,
+        crate::filter::StimulusType::SineAndNoise,
+    )
 }

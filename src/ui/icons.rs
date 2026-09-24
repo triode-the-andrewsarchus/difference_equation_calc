@@ -13,6 +13,7 @@ pub enum Icon {
     Plus,
     Close,
     Pin,
+    Waves,
 }
 
 impl Icon {
@@ -30,6 +31,7 @@ impl Icon {
             Self::Plus => "bytes://icons/plus.svg",
             Self::Close => "bytes://icons/x.svg",
             Self::Pin => "bytes://icons/pin.svg",
+            Self::Waves => "bytes://icons/waves.svg",
         }
     }
 
@@ -47,6 +49,7 @@ impl Icon {
             Self::Plus => include_bytes!("../../assets/icons/plus.svg"),
             Self::Close => include_bytes!("../../assets/icons/x.svg"),
             Self::Pin => include_bytes!("../../assets/icons/pin.svg"),
+            Self::Waves => include_bytes!("../../assets/icons/waves.svg"),
         }
     }
 

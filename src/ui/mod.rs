@@ -1,4 +1,5 @@
 pub mod equation_view;
+pub mod filter_designer;
 pub mod icons;
 pub mod measure_view;
 pub mod params_view;
@@ -18,6 +19,7 @@ use crate::sweep::{
     SweepMode, SweepResult,
 };
 use crate::ui::equation_view::render_equation_list;
+use crate::ui::filter_designer::{render_filter_designer_window, FilterDesignerState};
 use crate::ui::icons::Icon;
 use crate::ui::measure_view::render_measurements_panel;
 use crate::ui::params_view::render_parameters_panel;
@@ -41,6 +43,7 @@ pub struct DifferenceEquationApp {
     pub attractor_sweep_result: Option<AttractorSweepResult>,
     pub search_result: SearchResult,
     pub sweep_result: SweepResult,
+    pub filter_designer_state: FilterDesignerState,
     pub status_message: Option<(String, f32)>, // message, display timer
     pub cached_state: DocumentState,
     cached_sweep_mode: SweepMode,
@@ -82,6 +85,7 @@ impl DifferenceEquationApp {
                 min_measure: 0.0,
                 max_measure: 1.0,
             },
+            filter_designer_state: FilterDesignerState::default(),
             status_message: None,
             cached_sweep_mode: SweepMode::Measurement,
             cached_bifurcation_var: "a".to_string(),
@@ -288,6 +292,29 @@ impl eframe::App for DifferenceEquationApp {
                         self.status_message =
                             Some(("Ghost simulation pinned for comparison.".to_string(), 2.5));
                     }
+                }
+
+                ui.separator();
+
+                // Filter Designer Modal Button
+                let filter_active = self.filter_designer_state.is_open;
+                let filter_tint = if filter_active {
+                    Color32::from_rgb(80, 240, 160)
+                } else {
+                    Color32::from_rgb(200, 210, 230)
+                };
+                let filter_btn = egui::Button::image_and_text(
+                    Icon::Waves.image_tinted(13.0, filter_tint),
+                    "Filter Designer",
+                );
+                if ui
+                    .add(filter_btn)
+                    .on_hover_text(
+                        "Open interactive Z-domain Pole-Zero & Audio Biquad/SVF filter designer",
+                    )
+                    .clicked()
+                {
+                    self.filter_designer_state.is_open = !self.filter_designer_state.is_open;
                 }
 
                 ui.separator();
@@ -563,6 +590,26 @@ impl eframe::App for DifferenceEquationApp {
                 });
             });
         });
+
+        // Render Digital Filter Designer Window (if open)
+        let filter_resp =
+            render_filter_designer_window(ctx, &mut self.filter_designer_state, &mut self.doc);
+        if filter_resp.applied {
+            self.viewport.x_min = 0.0;
+            self.viewport.x_max = self.doc.state.sample_count as f64;
+            match self.filter_designer_state.engine {
+                crate::filter::FilterEngine::BiquadDirectForm2 => {
+                    self.phase_state.var_x = "x".to_string();
+                    self.phase_state.var_y = "y".to_string();
+                    self.bifurcation_var = "a1".to_string();
+                }
+                crate::filter::FilterEngine::ChamberlinSvf => {
+                    self.phase_state.var_x = "lp".to_string();
+                    self.phase_state.var_y = "bp".to_string();
+                    self.bifurcation_var = "f".to_string();
+                }
+            }
+        }
 
         // Check if document state or sweep mode changed to trigger live recomputation
         if self.doc.state != self.cached_state

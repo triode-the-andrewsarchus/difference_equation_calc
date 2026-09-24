@@ -105,6 +105,9 @@ All equations, search queries, and parameter sweeps remain live and continuously
      - **Hénon Strange Attractor**: 2D discrete chaotic dynamical system with fractal attractor.
      - **Lotka-Volterra (Predator-Prey)**: Coupled non-linear ecological population cycles.
      - **PID Feedback Controller**: Closed-loop setpoint tracking, latency, and overshoot.
+     - **Chamberlin State Variable Filter (SVF)**: Simultaneous lowpass, bandpass, and highpass outputs with instantaneous same-step topological resolution.
+     - **Resonant Biquad Lowpass (Direct Form II)**: 2nd-order audio biquad demonstrating step response overshoot, ringing, and cutoffs.
+     - **Notch Filter (Interference Rejection)**: Unit circle zero pair eliminating unwanted harmonic frequencies.
 
 9. **Ghost Behavior Comparison & Diffing**
    - Click "Pin Ghost" to snapshot the current system behavior as a reference trace.
@@ -127,11 +130,21 @@ All equations, search queries, and parameter sweeps remain live and continuously
     - Discards transient steps and plots asymptotic attractor states across parameter values (e.g. generating the Feigenbaum period-doubling bifurcation tree for the logistic map).
     - Dragging along the bifurcation plot updates the parameter live and dynamically shifts the system between fixed points, cycles, and chaos.
 
-13. **Error Localization**
+13. **Interactive Digital Filter Designer (Z-Domain & Audio DSP)**
+    - Direct manipulation Z-domain pole-zero unit circle canvas: draggable conjugate pole pair (`X` in coral) and zeros (`O` in cyan).
+    - Direct physical mapping: moving poles inside the unit disc interactively recalculates cutoff frequency $f_c$ and resonance $Q$.
+    - Live theoretical frequency response curve $|H(e^{j\omega})|$ in decibels ($-60\text{ dB} \dots +18\text{ dB}$) with $-3\text{ dB}$ cutoff line and hover frequency/gain crosshair.
+    - Dual filter architectures:
+      - Direct Form II 2nd-order Biquad (RBJ Audio Cookbook coefficients $b_0, b_1, b_2, a_1, a_2$).
+      - Chamberlin State Variable Filter (SVF) with live damping and resonance parameters.
+    - Stimulus signal selector: Impulse $\delta[n]$, Unit Step $u[n]$, Sine + High-Frequency Noise, Chirp Frequency Sweep, and Square Wave Train.
+    - Continuous live document link: dynamically injects synthesized difference equations and parameters into the live simulation workspace with zero-latency preview.
+
+14. **Error Localization**
     - Arithmetic failures (division by zero, negative square root, NaN, divergence) are captured with the exact timestep $n$ where failure occurred and displayed both on the timeline and inline.
     - Equation parse and dependency errors are shown directly beneath the corresponding equation.
 
-14. **Undo/Redo & Save/Load**
+15. **Undo/Redo & Save/Load**
     - Full history checkpointing with Ctrl+Z and Ctrl+Y.
     - Session serialization to/from human-readable JSON files via `rfd` dialogs.
 
@@ -153,11 +166,13 @@ src/
 ├── measure.rs      # Measurements engine (mean, rms, delta, duration, etc.)
 ├── sweep.rs        # Parameter vs measurement & attractor bifurcation sweeps
 ├── presets.rs      # Canonical discrete dynamical systems catalog
+├── filter.rs       # Complex arithmetic, biquad synthesis, SVF model, Z-plane roots & Bode eval
 ├── document.rs     # Document model, undo/redo history, serde serialization
 ├── ui/
-│   ├── mod.rs           # eframe app orchestration & top-level view
-│   ├── icons.rs         # Embedded vector SVG icons (no emojis)
-│   ├── waveforms.rs     # Aligned custom Painter waveforms, cursor, ghost traces
+│   ├── mod.rs             # eframe app orchestration & top-level view
+│   ├── icons.rs           # Embedded vector SVG icons (no emojis)
+│   ├── filter_designer.rs # Interactive Z-plane pole-zero & Bode plot filter designer window
+│   ├── waveforms.rs       # Aligned custom Painter waveforms, cursor, ghost traces
 │   ├── equation_view.rs # Equation editor with live term evaluation at step n
 │   ├── search_bar.rs    # Behavioral search bar, presets, region navigation
 │   ├── params_view.rs   # Parameter sliders and scrubber controls

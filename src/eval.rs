@@ -81,7 +81,12 @@ impl<'a> EvalContext for SlicedContext<'a> {
     }
 
     fn get_parameter(&self, name: &str) -> Option<f64> {
-        self.parameters.get(name).copied()
+        match name {
+            "n" => Some(self.current_step as f64),
+            "pi" | "PI" => Some(std::f64::consts::PI),
+            "e" | "E" => Some(std::f64::consts::E),
+            _ => self.parameters.get(name).copied(),
+        }
     }
 }
 
