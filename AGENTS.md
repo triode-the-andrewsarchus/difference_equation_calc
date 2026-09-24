@@ -48,7 +48,7 @@ The codebase strictly enforces clean separation between the mathematical core an
    - Same-step instantaneous dependencies (e.g. `b[n+1]` referencing `a[n+1]`) must be resolved via topological sort.
    - Instantaneous cycles (e.g. `a[n+1] = b[n+1]` and `b[n+1] = a[n+1]`) are errors.
    - Delayed cycles (e.g. `a[n+1] = b[n]` and `b[n+1] = a[n]`) are completely legal.
-4. **Lexer**: Use `logos` (`src/lexer.rs`). Do not replace it with fragile ad-hoc string regexes.
+4. **Lexer & Parser**: Use `logos` (`src/lexer.rs`) for tokenization and `nom` combinators (`src/parser.rs`) for expression and equation parsing. Do not replace them with fragile ad-hoc string regexes.
 5. **UI Rendering**: Waveforms, selection bands, search overlays, and cursors are drawn using custom egui `Painter` primitives for precise alignment and maximum performance.
 
 ---
