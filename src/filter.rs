@@ -112,6 +112,15 @@ impl FilterType {
             Self::Notch => "Notch / Band-Reject",
         }
     }
+
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Self::Lowpass => "Lowpass",
+            Self::Highpass => "Highpass",
+            Self::Bandpass => "Bandpass",
+            Self::Notch => "Notch",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +148,16 @@ impl StimulusType {
             Self::SineAndNoise => "Sine + High-Freq Noise",
             Self::Chirp => "Frequency Chirp Sweep",
             Self::SquareWave => "Square Wave Train",
+        }
+    }
+
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Self::Impulse => "Impulse δ",
+            Self::Step => "Step u",
+            Self::SineAndNoise => "Sine + Noise",
+            Self::Chirp => "Chirp",
+            Self::SquareWave => "Square",
         }
     }
 

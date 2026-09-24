@@ -62,8 +62,9 @@ pub fn render_filter_designer_window(
     egui::Window::new("Digital Filter Designer")
         .open(&mut is_open)
         .resizable(true)
-        .default_size(vec2(720.0, 520.0))
-        .min_size(vec2(640.0, 460.0))
+        .default_size(vec2(720.0, 530.0))
+        .min_size(vec2(600.0, 460.0))
+        .max_size(vec2(1200.0, 800.0))
         .show(ctx, |ui| {
             let mut state_changed = false;
 
@@ -72,7 +73,12 @@ pub fn render_filter_designer_window(
                 ui.label(egui::RichText::new("Filter:").strong());
                 for ft in FilterType::ALL {
                     let is_active = state.filter_type == ft;
-                    if ui.selectable_label(is_active, ft.name()).clicked() && !is_active {
+                    if ui
+                        .selectable_label(is_active, ft.short_name())
+                        .on_hover_text(ft.name())
+                        .clicked()
+                        && !is_active
+                    {
                         state.filter_type = ft;
                         state_changed = true;
                     }
@@ -83,7 +89,7 @@ pub fn render_filter_designer_window(
                 ui.label(egui::RichText::new("Engine:").strong());
                 let is_biquad = state.engine == FilterEngine::BiquadDirectForm2;
                 if ui
-                    .selectable_label(is_biquad, "Biquad (DF2)")
+                    .selectable_label(is_biquad, "Biquad DF2")
                     .on_hover_text("Direct Form II 2nd-order difference equation with 5 parameters")
                     .clicked()
                     && !is_biquad
@@ -110,7 +116,12 @@ pub fn render_filter_designer_window(
                 ui.label(egui::RichText::new("Stimulus:").strong());
                 for stim in StimulusType::ALL {
                     let is_active = state.stimulus == stim;
-                    if ui.selectable_label(is_active, stim.name()).clicked() && !is_active {
+                    if ui
+                        .selectable_label(is_active, stim.short_name())
+                        .on_hover_text(stim.name())
+                        .clicked()
+                        && !is_active
+                    {
                         state.stimulus = stim;
                         state_changed = true;
                     }
@@ -118,7 +129,7 @@ pub fn render_filter_designer_window(
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .checkbox(&mut state.live_preview, "Live Link to Document")
+                        .checkbox(&mut state.live_preview, "Live Link")
                         .on_hover_text("Continuously stream filter parameters and equations into simulation in real time")
                         .changed()
                         && state.live_preview
@@ -137,64 +148,50 @@ pub fn render_filter_designer_window(
             let pole_mag = pole1.mag().max(pole2.mag());
             let is_stable = pole_mag < 1.0;
 
-            // Interactive Graphics Area: Z-Plane (Left) and Bode Plot (Right)
-            ui.horizontal(|ui| {
-                let avail_w = ui.available_width();
-                let zplane_w = (avail_w * 0.38).clamp(240.0, 320.0);
-                let bode_w = avail_w - zplane_w - 12.0;
-                let canvas_h = 240.0;
-
+            // Interactive Graphics Area: Z-Plane (Left) and Bode Plot (Right) using bounded columns
+            let canvas_h = 240.0;
+            ui.columns(2, |cols| {
                 // 1. Z-Domain Complex Unit Circle
-                ui.allocate_ui_with_layout(
-                    vec2(zplane_w, canvas_h),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.label(
-                            egui::RichText::new("Z-Domain Pole-Zero Complex Plane")
-                                .size(11.0)
-                                .color(Color32::from_rgb(180, 200, 230)),
-                        );
-
-                        let z_changed = render_zplane_canvas(
-                            ui,
-                            vec2(zplane_w, canvas_h - 18.0),
-                            state,
-                            pole1,
-                            pole2,
-                            zero1,
-                            zero2,
-                        );
-                        if z_changed {
-                            state_changed = true;
-                        }
-                    },
+                let col0 = &mut cols[0];
+                let col0_w = col0.available_width();
+                col0.label(
+                    egui::RichText::new("Z-Domain Pole-Zero Complex Plane")
+                        .size(11.0)
+                        .color(Color32::from_rgb(180, 200, 230)),
                 );
 
-                ui.separator();
+                let z_changed = render_zplane_canvas(
+                    col0,
+                    vec2(col0_w, canvas_h - 18.0),
+                    state,
+                    pole1,
+                    pole2,
+                    zero1,
+                    zero2,
+                );
+                if z_changed {
+                    state_changed = true;
+                }
 
                 // 2. Bode Frequency Response Plot
-                ui.allocate_ui_with_layout(
-                    vec2(bode_w, canvas_h),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        let hz = state.fc * state.sample_rate;
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Magnitude Response |H(e^jω)| (Cutoff: {:.4} / {:.0} Hz)",
-                                state.fc, hz
-                            ))
-                            .size(11.0)
-                            .color(Color32::from_rgb(180, 200, 230)),
-                        );
+                let col1 = &mut cols[1];
+                let col1_w = col1.available_width();
+                let hz = state.fc * state.sample_rate;
+                col1.label(
+                    egui::RichText::new(format!(
+                        "Magnitude Response |H(e^jω)| (Cutoff: {:.4} / {:.0} Hz)",
+                        state.fc, hz
+                    ))
+                    .size(11.0)
+                    .color(Color32::from_rgb(180, 200, 230)),
+                );
 
-                        render_bode_plot_canvas(
-                            ui,
-                            vec2(bode_w, canvas_h - 18.0),
-                            &coeffs,
-                            state.fc,
-                            state.sample_rate,
-                        );
-                    },
+                render_bode_plot_canvas(
+                    col1,
+                    vec2(col1_w, canvas_h - 18.0),
+                    &coeffs,
+                    state.fc,
+                    state.sample_rate,
                 );
             });
 
