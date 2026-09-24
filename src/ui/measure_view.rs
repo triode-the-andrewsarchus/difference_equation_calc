@@ -4,7 +4,12 @@ use crate::sim::SimulationResult;
 use crate::ui::waveforms::TRACE_COLORS;
 use egui::{vec2, Color32, Ui};
 
-pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &SimulationResult) {
+pub fn render_measurements_panel(
+    ui: &mut Ui,
+    doc: &mut Document,
+    sim_result: &SimulationResult,
+    ghost_sim: Option<&SimulationResult>,
+) {
     ui.group(|ui| {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("Measurements").size(14.0).strong());
@@ -25,9 +30,21 @@ pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &S
                 }
             } else {
                 ui.label(
-                    egui::RichText::new(format!("Whole timeline (0 .. {})", sim_result.sample_count.saturating_sub(1)))
-                        .italics()
-                        .color(Color32::from_rgb(140, 150, 170)),
+                    egui::RichText::new(format!(
+                        "Whole timeline (0 .. {})",
+                        sim_result.sample_count.saturating_sub(1)
+                    ))
+                    .italics()
+                    .color(Color32::from_rgb(140, 150, 170)),
+                );
+            }
+
+            if ghost_sim.is_some() {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("Comparing with Pinned Ghost")
+                        .size(11.0)
+                        .color(Color32::from_rgb(150, 180, 255)),
                 );
             }
         });
@@ -56,14 +73,10 @@ pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &S
                     ui.vertical(|ui| {
                         // Header card for variable
                         ui.horizontal(|ui| {
-                            let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+                            let (rect, _) =
+                                ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
                             ui.painter().circle_filled(rect.center(), 4.0, color);
-                            ui.label(
-                                egui::RichText::new(var)
-                                    .strong()
-                                    .color(color)
-                                    .size(13.0),
-                            );
+                            ui.label(egui::RichText::new(var).strong().color(color).size(13.0));
                         });
 
                         egui::Frame::NONE
@@ -72,7 +85,7 @@ pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &S
                             .inner_margin(6.0)
                             .show(ui, |ui| {
                                 egui::Grid::new(format!("grid_{var}"))
-                                    .num_columns(3)
+                                    .num_columns(4)
                                     .spacing([6.0, 2.0])
                                     .show(ui, |ui| {
                                         let types_to_show = [
@@ -86,7 +99,13 @@ pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &S
 
                                         for m_type in types_to_show {
                                             let spec = MeasurementSpec::new(var, m_type);
-                                            let val_str = match calculate_measurement(&spec, sim_result, s0, s1) {
+                                            let live_val =
+                                                calculate_measurement(&spec, sim_result, s0, s1);
+                                            let ghost_val = ghost_sim.and_then(|g| {
+                                                calculate_measurement(&spec, g, s0, s1).ok()
+                                            });
+
+                                            let val_str = match live_val {
                                                 Ok(v) => format!("{:.4}", v),
                                                 Err(_) => "---".to_string(),
                                             };
@@ -103,8 +122,33 @@ pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &S
                                                     .color(Color32::WHITE),
                                             );
 
-                                            let is_current_sweep = doc.state.sweep_config.measurement == spec;
-                                            let btn_text = if is_current_sweep { "● Plotted" } else { "Plot" };
+                                            // Ghost diff badge
+                                            if let (Ok(curr), Some(prev)) = (live_val, ghost_val) {
+                                                let diff = curr - prev;
+                                                let diff_color = if diff.abs() < 1e-6 {
+                                                    Color32::from_rgb(120, 130, 150)
+                                                } else if diff > 0.0 {
+                                                    Color32::from_rgb(80, 220, 140)
+                                                } else {
+                                                    Color32::from_rgb(255, 130, 100)
+                                                };
+                                                ui.label(
+                                                    egui::RichText::new(format!("Δ{:+.3}", diff))
+                                                        .monospace()
+                                                        .size(9.5)
+                                                        .color(diff_color),
+                                                );
+                                            } else {
+                                                ui.label("");
+                                            }
+
+                                            let is_current_sweep =
+                                                doc.state.sweep_config.measurement == spec;
+                                            let btn_text = if is_current_sweep {
+                                                "● Plotted"
+                                            } else {
+                                                "Plot"
+                                            };
                                             let btn_color = if is_current_sweep {
                                                 Color32::from_rgb(0, 220, 255)
                                             } else {
@@ -120,7 +164,10 @@ pub fn render_measurements_panel(ui: &mut Ui, doc: &mut Document, sim_result: &S
                                                     )
                                                     .fill(Color32::from_rgb(30, 33, 44)),
                                                 )
-                                                .on_hover_text(format!("Sweep this measurement against parameter vs {}", doc.state.sweep_config.parameter_name))
+                                                .on_hover_text(format!(
+                                                    "Sweep this measurement against parameter vs {}",
+                                                    doc.state.sweep_config.parameter_name
+                                                ))
                                                 .clicked()
                                             {
                                                 doc.state.sweep_config.measurement = spec;

@@ -320,3 +320,77 @@ fn check_arg_count(func: &str, args: &[Expr], expected: usize) -> Result<(), Eva
         Ok(())
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermEvaluation {
+    pub label: String,
+    pub value: f64,
+}
+
+/// Recursively inspects an expression and collects concrete values for all referenced
+/// state variables and parameters at a specific evaluation context / time step.
+pub fn collect_equation_term_evaluations<C: EvalContext>(
+    expr: &Expr,
+    ctx: &C,
+) -> (Option<f64>, Vec<TermEvaluation>) {
+    let mut terms = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    fn walk<C: EvalContext>(
+        e: &Expr,
+        ctx: &C,
+        terms: &mut Vec<TermEvaluation>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        match &e.kind {
+            ExprKind::StateRef { variable, offset } => {
+                let label = if *offset == 0 {
+                    format!("{variable}[n]")
+                } else if *offset > 0 {
+                    format!("{variable}[n+{offset}]")
+                } else {
+                    format!("{variable}[n{offset}]")
+                };
+                if seen.insert(label.clone()) {
+                    if let Ok(v) = ctx.get_state(variable, *offset) {
+                        terms.push(TermEvaluation { label, value: v });
+                    }
+                }
+            }
+            ExprKind::Parameter(name) => {
+                let label = name.clone();
+                if seen.insert(label.clone()) {
+                    if let Some(v) = ctx.get_parameter(name) {
+                        terms.push(TermEvaluation { label, value: v });
+                    } else if let Ok(v) = ctx.get_state(name, 0) {
+                        terms.push(TermEvaluation { label, value: v });
+                    }
+                }
+            }
+            ExprKind::Unary { expr, .. } => walk(expr, ctx, terms, seen),
+            ExprKind::Binary { left, right, .. } => {
+                walk(left, ctx, terms, seen);
+                walk(right, ctx, terms, seen);
+            }
+            ExprKind::Cond {
+                condition,
+                true_val,
+                false_val,
+            } => {
+                walk(condition, ctx, terms, seen);
+                walk(true_val, ctx, terms, seen);
+                walk(false_val, ctx, terms, seen);
+            }
+            ExprKind::Call { args, .. } => {
+                for a in args {
+                    walk(a, ctx, terms, seen);
+                }
+            }
+            ExprKind::Literal(_) => {}
+        }
+    }
+
+    walk(expr, ctx, &mut terms, &mut seen);
+    let overall_val = eval_expr(expr, ctx).ok();
+    (overall_val, terms)
+}

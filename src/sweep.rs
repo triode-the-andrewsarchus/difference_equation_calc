@@ -103,3 +103,98 @@ pub fn execute_parameter_sweep(
         max_measure,
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SweepMode {
+    Measurement,
+    AttractorBifurcation,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttractorPoint {
+    pub param_val: f64,
+    pub state_val: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AttractorSweepConfig {
+    pub parameter_name: String,
+    pub variable_name: String,
+    pub min_val: f64,
+    pub max_val: f64,
+    pub slices: usize,
+    pub total_steps: usize,
+    pub tail_steps: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttractorSweepResult {
+    pub parameter_name: String,
+    pub variable_name: String,
+    pub points: Vec<AttractorPoint>,
+    pub param_min: f64,
+    pub param_max: f64,
+    pub state_min: f64,
+    pub state_max: f64,
+}
+
+pub fn execute_attractor_sweep(
+    config: &AttractorSweepConfig,
+    equations: &[Equation],
+    initial_conditions: &HashMap<String, f64>,
+    base_parameters: &HashMap<String, f64>,
+) -> AttractorSweepResult {
+    let slices = config.slices.max(10);
+    let mut points = Vec::new();
+    let mut state_min = f64::INFINITY;
+    let mut state_max = f64::NEG_INFINITY;
+
+    let mut sweep_params = base_parameters.clone();
+    let step_size = (config.max_val - config.min_val) / ((slices - 1) as f64);
+    let tail_start = config.total_steps.saturating_sub(config.tail_steps);
+
+    for i in 0..slices {
+        let p_val = config.min_val + (i as f64) * step_size;
+        sweep_params.insert(config.parameter_name.clone(), p_val);
+
+        if let Ok(sim_res) = run_simulation(
+            equations,
+            initial_conditions,
+            &sweep_params,
+            config.total_steps,
+        ) {
+            if let Some(series) = sim_res.series.get(&config.variable_name) {
+                let vals = &series.values;
+                let tail = &vals[tail_start.min(vals.len())..vals.len()];
+                for &v in tail {
+                    if v.is_finite() && v.abs() < 1e5 {
+                        state_min = state_min.min(v);
+                        state_max = state_max.max(v);
+                        points.push(AttractorPoint {
+                            param_val: p_val,
+                            state_val: v,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if !state_min.is_finite() {
+        state_min = 0.0;
+        state_max = 1.0;
+    } else if (state_max - state_min).abs() < 1e-9 {
+        state_max += 1.0;
+        state_min -= 1.0;
+    }
+
+    AttractorSweepResult {
+        parameter_name: config.parameter_name.clone(),
+        variable_name: config.variable_name.clone(),
+        points,
+        param_min: config.min_val,
+        param_max: config.max_val,
+        state_min,
+        state_max,
+    }
+}

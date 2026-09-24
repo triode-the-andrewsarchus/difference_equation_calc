@@ -12,6 +12,7 @@ pub enum Icon {
     Reset,
     Plus,
     Close,
+    Pin,
 }
 
 impl Icon {
@@ -28,6 +29,7 @@ impl Icon {
             Self::Reset => "bytes://icons/rotate_ccw.svg",
             Self::Plus => "bytes://icons/plus.svg",
             Self::Close => "bytes://icons/x.svg",
+            Self::Pin => "bytes://icons/pin.svg",
         }
     }
 
@@ -44,6 +46,7 @@ impl Icon {
             Self::Reset => include_bytes!("../../assets/icons/rotate_ccw.svg"),
             Self::Plus => include_bytes!("../../assets/icons/plus.svg"),
             Self::Close => include_bytes!("../../assets/icons/x.svg"),
+            Self::Pin => include_bytes!("../../assets/icons/pin.svg"),
         }
     }
 

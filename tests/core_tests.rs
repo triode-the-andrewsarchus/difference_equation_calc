@@ -329,3 +329,127 @@ fn test_parameter_sweep_does_not_mutate_document() {
         "Parameter sweep mutated the document parameter!"
     );
 }
+
+// 11. Presets test: all preset systems parse and simulate cleanly
+#[test]
+fn test_all_presets() {
+    use difference_equation_calc::presets::ALL_PRESETS;
+
+    for preset in ALL_PRESETS {
+        let state = (preset.state_builder)();
+        let (eqs, parse_errors) = state.get_parsed_equations();
+        assert!(
+            parse_errors.is_empty(),
+            "Preset '{}' had parse errors: {:?}",
+            preset.name,
+            parse_errors
+        );
+
+        let dep_analysis = analyze_dependencies(&eqs);
+        assert!(
+            dep_analysis.is_ok(),
+            "Preset '{}' had dependency cycle error: {:?}",
+            preset.name,
+            dep_analysis.err()
+        );
+        let _eval_order = dep_analysis.unwrap();
+
+        let params_map = state.get_parameters_map();
+        let sim = run_simulation(
+            &eqs,
+            &state.initial_conditions,
+            &params_map,
+            state.sample_count,
+        )
+        .expect("Simulation setup failed");
+
+        assert!(
+            sim.failure.is_none(),
+            "Preset '{}' failed during simulation: {:?}",
+            preset.name,
+            sim.failure
+        );
+        assert_eq!(sim.sample_count, state.sample_count);
+    }
+}
+
+// 12. Inline term evaluations at cursor step n
+#[test]
+fn test_inline_term_evaluations_at_step() {
+    use difference_equation_calc::eval::collect_equation_term_evaluations;
+    use difference_equation_calc::sim::SimResultContext;
+
+    let doc = Document::default();
+    let (eqs, _) = doc.state.get_parsed_equations();
+    let params = doc.state.get_parameters_map();
+    let sim = run_simulation(
+        &eqs,
+        &doc.state.initial_conditions,
+        &params,
+        doc.state.sample_count,
+    )
+    .unwrap();
+
+    let ctx = SimResultContext {
+        sim_result: &sim,
+        current_step: 10,
+        parameters: &params,
+    };
+
+    // First equation: a[n+1] = a[n] - k * b[n]
+    let (rhs_val, terms) = collect_equation_term_evaluations(&eqs[0].rhs, &ctx);
+    assert!(rhs_val.is_some());
+
+    let a_term = terms.iter().find(|t| t.label == "a[n]");
+    assert!(a_term.is_some(), "Expected a[n] term in evaluation trace");
+    assert_eq!(a_term.unwrap().value, sim.get_value("a", 10).unwrap());
+
+    let k_term = terms.iter().find(|t| t.label == "k");
+    assert!(k_term.is_some(), "Expected k parameter in evaluation trace");
+    assert_eq!(k_term.unwrap().value, 0.094);
+
+    let b_term = terms.iter().find(|t| t.label == "b[n]");
+    assert!(b_term.is_some(), "Expected b[n] term in evaluation trace");
+    assert_eq!(b_term.unwrap().value, sim.get_value("b", 10).unwrap());
+
+    let expected_rhs = a_term.unwrap().value - k_term.unwrap().value * b_term.unwrap().value;
+    assert!((rhs_val.unwrap() - expected_rhs).abs() < 1e-9);
+}
+
+// 13. Attractor bifurcation sweep
+#[test]
+fn test_attractor_bifurcation_sweep() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    use difference_equation_calc::sweep::{execute_attractor_sweep, AttractorSweepConfig};
+
+    let preset = get_preset_by_kind(PresetKind::LogisticMap);
+    let state = (preset.state_builder)();
+    let (eqs, _) = state.get_parsed_equations();
+    let params = state.get_parameters_map();
+
+    let config = AttractorSweepConfig {
+        parameter_name: "r".to_string(),
+        variable_name: "x".to_string(),
+        min_val: 2.8,
+        max_val: 3.9,
+        slices: 50,
+        total_steps: 200,
+        tail_steps: 50,
+    };
+    let sweep = execute_attractor_sweep(&config, &eqs, &state.initial_conditions, &params);
+
+    assert_eq!(sweep.parameter_name, "r");
+    assert_eq!(sweep.variable_name, "x");
+    assert!(
+        !sweep.points.is_empty(),
+        "Attractor sweep generated no points"
+    );
+    assert!(
+        sweep.state_min >= 0.0,
+        "Logistic map values should stay non-negative"
+    );
+    assert!(
+        sweep.state_max <= 1.0,
+        "Logistic map values should stay <= 1.0"
+    );
+}

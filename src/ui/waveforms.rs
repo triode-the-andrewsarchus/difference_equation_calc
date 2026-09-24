@@ -34,6 +34,7 @@ pub struct WaveformRowInfo<'a> {
     pub name: &'a str,
     pub color: Color32,
     pub values: &'a [f64],
+    pub ghost_values: Option<&'a [f64]>,
 }
 
 pub struct WaveformGridResponse {
@@ -441,6 +442,39 @@ fn render_single_row(
         Color32::from_rgb(90, 95, 110),
     );
 
+    // If ghost trace exists, render it first as a faint comparison curve
+    if let Some(ghost) = row.ghost_values {
+        let ghost_end = end_idx.min(ghost.len());
+        let ghost_start = start_idx.min(ghost_end);
+        let sample_step = if (ghost_end - ghost_start) > 2000 {
+            2
+        } else {
+            1
+        };
+        let mut ghost_points = Vec::new();
+        let ghost_stroke = Stroke::new(
+            1.2_f32,
+            Color32::from_rgba_unmultiplied(row.color.r(), row.color.g(), row.color.b(), 75),
+        );
+
+        for i in (ghost_start..ghost_end).step_by(sample_step) {
+            let val = ghost[i];
+            if val.is_finite() {
+                let sx = x_to_screen(i as f64);
+                let sy = y_to_screen(val);
+                ghost_points.push(pos2(sx, sy));
+            } else {
+                if ghost_points.len() >= 2 {
+                    painter.add(egui::Shape::line(ghost_points.clone(), ghost_stroke));
+                }
+                ghost_points.clear();
+            }
+        }
+        if ghost_points.len() >= 2 {
+            painter.add(egui::Shape::line(ghost_points, ghost_stroke));
+        }
+    }
+
     // Build waveform polyline path
     let mut points = Vec::new();
     let sample_step = if (end_idx - start_idx) > 2000 { 2 } else { 1 };
@@ -485,7 +519,8 @@ fn draw_cursor_readout(
         }
     }
 
-    let box_width = 110.0;
+    let has_any_ghost = rows.iter().any(|r| r.ghost_values.is_some());
+    let box_width = if has_any_ghost { 170.0 } else { 110.0 };
     let box_height = 20.0 + (rows.len() as f32) * 16.0;
 
     let mut box_x = cursor_x + 12.0;
@@ -515,18 +550,24 @@ fn draw_cursor_readout(
     painter.text(
         pos2(box_x + 8.0, box_y + 6.0),
         egui::Align2::LEFT_TOP,
-        &lines[0],
+        format!("n = {step}"),
         FontId::monospace(11.0),
         Color32::WHITE,
     );
 
     for (i, row) in rows.iter().enumerate() {
         if let Some(&val) = row.values.get(step) {
+            let label = if let Some(ghost) = row.ghost_values.and_then(|g| g.get(step)) {
+                format!("{}: {:.3} (ghost {:.3})", row.name, val, ghost)
+            } else {
+                format!("{}: {:.4}", row.name, val)
+            };
+
             painter.text(
                 pos2(box_x + 8.0, box_y + 22.0 + (i as f32) * 15.0),
                 egui::Align2::LEFT_TOP,
-                format!("{}: {:.4}", row.name, val),
-                FontId::monospace(11.0),
+                label,
+                FontId::monospace(10.5),
                 row.color,
             );
         }

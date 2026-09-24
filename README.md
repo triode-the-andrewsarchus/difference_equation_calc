@@ -97,13 +97,43 @@ All equations, search queries, and parameter sweeps remain live and continuously
    - The current parameter value appears as a glowing interactive point on the curve.
    - Dragging this point sweeps the parameter live and immediately updates the system's waveforms in real time.
 
-7. **Error Localization**
-   - Arithmetic failures (division by zero, negative square root, NaN, divergence) are captured with the exact timestep $n$ where failure occurred and displayed both on the timeline and inline.
-   - Equation parse and dependency errors are shown directly beneath the corresponding equation.
+8. **Canonical Dynamical Systems Gallery (Presets)**
+   - Instant switcher menu with 6 classic discrete systems:
+     - **Harmonic Oscillator (Bret Victor Demo)**: Coupled oscillator with same-step dependency, comparator, and integrator.
+     - **Van der Pol Oscillator**: Non-linear damping producing isolated limit cycle attractors.
+     - **Logistic Map**: Classic quadratic map exhibiting period-doubling cascade into chaos.
+     - **Hénon Strange Attractor**: 2D discrete chaotic dynamical system with fractal attractor.
+     - **Lotka-Volterra (Predator-Prey)**: Coupled non-linear ecological population cycles.
+     - **PID Feedback Controller**: Closed-loop setpoint tracking, latency, and overshoot.
 
-8. **Undo/Redo & Save/Load**
-   - Full history checkpointing with Ctrl+Z and Ctrl+Y.
-   - Session serialization to/from human-readable JSON files via `rfd` dialogs.
+9. **Ghost Behavior Comparison & Diffing**
+   - Click "Pin Ghost" to snapshot the current system behavior as a reference trace.
+   - Pinned ghost curves are drawn faintly underneath live waveforms and in the phase portrait.
+   - Measurement cards automatically display quantitative deltas ($\Delta = \text{live} - \text{ghost}$ and percentage changes).
+   - Synchronized cursor readout shows live and ghost values side-by-side.
+
+10. **Phase Portrait / State Space View ($y[n]$ vs $x[n]$)**
+    - Interactive 2D parametric state space trajectory plotting any two chosen variables.
+    - Synchronized with waveform timeline: the active cursor $n$ appears as a glowing orbit marker with coordinates HUD.
+    - Active time selection highlights the corresponding orbit arc while dimming unselected portions.
+    - Bidirectional interaction: clicking or dragging on the phase canvas scrubs the waveform cursor $n$ live.
+
+11. **Inline Term Evaluation at Cursor $n$**
+    - Moving the timeline cursor $n$ displays concrete numeric evaluations of all referenced variables and parameters directly beneath each equation.
+    - Bridges the gap between symbolic definition and temporal consequence.
+
+12. **Bifurcation / Attractor Sweep Mode**
+    - Switch parameter sweep between scalar measurements and attractor point clouds.
+    - Discards transient steps and plots asymptotic attractor states across parameter values (e.g. generating the Feigenbaum period-doubling bifurcation tree for the logistic map).
+    - Dragging along the bifurcation plot updates the parameter live and dynamically shifts the system between fixed points, cycles, and chaos.
+
+13. **Error Localization**
+    - Arithmetic failures (division by zero, negative square root, NaN, divergence) are captured with the exact timestep $n$ where failure occurred and displayed both on the timeline and inline.
+    - Equation parse and dependency errors are shown directly beneath the corresponding equation.
+
+14. **Undo/Redo & Save/Load**
+    - Full history checkpointing with Ctrl+Z and Ctrl+Y.
+    - Session serialization to/from human-readable JSON files via `rfd` dialogs.
 
 ---
 
@@ -115,22 +145,25 @@ The mathematical core has zero GUI dependencies and is independently unit-tested
 src/
 ├── ast.rs          # AST nodes: Expr, BinaryOp, UnaryOp, StateRef, Span
 ├── lexer.rs        # Compile-time Logos DFA tokenizer with byte span tracking
-├── parser.rs       # Pratt parser for recurrence equations & boolean expressions
+├── parser.rs       # Nom-based parser combinators for recurrence equations & queries
 ├── deps.rs         # Dependency graph, cycle detection, topological sorting
-├── eval.rs         # Expression evaluator & builtin math/cond functions
+├── eval.rs         # Expression evaluator, builtin math functions & term inspection
 ├── sim.rs          # Dynamical system simulator & failure localization
 ├── query.rs        # Behavioral search & contiguous region extraction
 ├── measure.rs      # Measurements engine (mean, rms, delta, duration, etc.)
-├── sweep.rs        # Parameter vs measurement sweep
+├── sweep.rs        # Parameter vs measurement & attractor bifurcation sweeps
+├── presets.rs      # Canonical discrete dynamical systems catalog
 ├── document.rs     # Document model, undo/redo history, serde serialization
 ├── ui/
 │   ├── mod.rs           # eframe app orchestration & top-level view
-│   ├── waveforms.rs     # Aligned custom Painter waveforms, cursor, selection
-│   ├── equation_view.rs # Equation editor with scrubbable numbers & promote-to-param
+│   ├── icons.rs         # Embedded vector SVG icons (no emojis)
+│   ├── waveforms.rs     # Aligned custom Painter waveforms, cursor, ghost traces
+│   ├── equation_view.rs # Equation editor with live term evaluation at step n
 │   ├── search_bar.rs    # Behavioral search bar, presets, region navigation
 │   ├── params_view.rs   # Parameter sliders and scrubber controls
-│   ├── measure_view.rs  # Selection measurement cards
-│   └── sweep_view.rs    # Interactive measurement vs parameter 2D plot
+│   ├── measure_view.rs  # Selection measurement cards with ghost diffs
+│   ├── phase_view.rs    # 2D parametric state space trajectory canvas
+│   └── sweep_view.rs    # 2D plot supporting measurement & bifurcation sweeps
 └── main.rs         # Wayland desktop native entry point
 ```
 

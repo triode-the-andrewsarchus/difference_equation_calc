@@ -77,6 +77,35 @@ impl<'a> EvalContext for SimulationContext<'a> {
 }
 
 #[derive(Debug)]
+pub struct SimResultContext<'a> {
+    pub sim_result: &'a SimulationResult,
+    pub current_step: usize,
+    pub parameters: &'a HashMap<String, f64>,
+}
+
+impl<'a> EvalContext for SimResultContext<'a> {
+    fn get_state(&self, variable: &str, offset: i64) -> Result<f64, EvalError> {
+        let series = self
+            .sim_result
+            .series
+            .get(variable)
+            .ok_or_else(|| EvalError::UndefinedVariable(variable.to_string()))?;
+        let target_idx = (self.current_step as i64) + offset;
+        if target_idx < 0 || (target_idx as usize) >= series.values.len() {
+            return Err(EvalError::MissingHistory {
+                variable: variable.to_string(),
+                requested_index: target_idx,
+            });
+        }
+        Ok(series.values[target_idx as usize])
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<f64> {
+        self.parameters.get(name).copied()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SimulationSetupError {
     Dependency(DependencyError),
     NoEquations,

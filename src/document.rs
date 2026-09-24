@@ -132,6 +132,12 @@ pub struct Document {
     next_eq_id: u64,
 }
 
+impl Default for Document {
+    fn default() -> Self {
+        Self::new(DocumentState::default())
+    }
+}
+
 impl Document {
     pub fn new(state: DocumentState) -> Self {
         let next_eq_id = state.equations.iter().map(|e| e.id).max().unwrap_or(0) + 1;

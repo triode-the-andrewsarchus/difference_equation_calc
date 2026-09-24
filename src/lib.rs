@@ -5,6 +5,7 @@ pub mod eval;
 pub mod lexer;
 pub mod measure;
 pub mod parser;
+pub mod presets;
 pub mod query;
 pub mod sim;
 pub mod sweep;

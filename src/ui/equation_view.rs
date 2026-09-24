@@ -3,6 +3,7 @@ use crate::deps::DependencyError;
 use crate::document::{Document, ParameterDoc};
 use crate::lexer::{Lexer, TokenKind};
 use crate::parser::ParseError;
+use crate::sim::SimulationResult;
 use crate::ui::icons::Icon;
 use crate::ui::waveforms::TRACE_COLORS;
 use egui::{vec2, Color32, Ui};
@@ -26,6 +27,8 @@ pub fn render_equation_list(
     doc: &mut Document,
     parse_errors: &HashMap<u64, ParseError>,
     dep_error: Option<&DependencyError>,
+    sim_result: Option<&SimulationResult>,
+    cursor_step: Option<usize>,
 ) {
     let mut scrub_action = None;
     let mut promote_action = None;
@@ -60,7 +63,6 @@ pub fn render_equation_list(
 
         ui.add_space(4.0);
 
-        let row_height = 100.0;
         let equations_count = doc.state.equations.len();
 
         for i in 0..equations_count {
@@ -71,169 +73,215 @@ pub fn render_equation_list(
             let color = TRACE_COLORS[eq_color_idx % TRACE_COLORS.len()];
             let parse_err = parse_errors.get(&eq_id);
 
-            ui.allocate_ui_with_layout(
-                vec2(ui.available_width(), row_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    egui::Frame::NONE
-                        .fill(Color32::from_rgb(22, 24, 32))
-                        .corner_radius(4.0)
-                        .inner_margin(6.0)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                // Color dot indicator
-                                let (rect, _) =
-                                    ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
-                                ui.painter().circle_filled(rect.center(), 4.5, color);
+            ui.vertical(|ui| {
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(22, 24, 32))
+                    .corner_radius(4.0)
+                    .inner_margin(6.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // Color dot indicator
+                            let (rect, _) =
+                                ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4.5, color);
 
-                                // Equation text edit
-                                let mut text = eq_source.clone();
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(&mut text)
-                                        .desired_width(ui.available_width() - 40.0)
-                                        .font(egui::TextStyle::Monospace),
-                                );
+                            // Equation text edit
+                            let mut text = eq_source.clone();
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .desired_width(ui.available_width() - 40.0)
+                                    .font(egui::TextStyle::Monospace),
+                            );
 
-                                if response.changed() {
-                                    source_changes.push((i, text));
-                                }
-
-                                // Delete equation button
-                                if ui
-                                    .add(egui::Button::image(
-                                        Icon::Close
-                                            .image_tinted(9.0, Color32::from_rgb(180, 190, 210)),
-                                    ))
-                                    .on_hover_text("Remove equation")
-                                    .clicked()
-                                {
-                                    delete_eq_id = Some(eq_id);
-                                }
-                            });
-
-                            // Display inline parse error if any
-                            if let Some(err) = parse_err {
-                                ui.horizontal(|ui| {
-                                    Icon::Alert.ui(ui, 11.0, Color32::from_rgb(255, 90, 90));
-                                    ui.label(
-                                        egui::RichText::new(&err.message)
-                                            .color(Color32::from_rgb(255, 90, 90))
-                                            .size(10.5),
-                                    );
-                                });
+                            if response.changed() {
+                                source_changes.push((i, text));
                             }
 
-                            // Extract numeric literals for scrubbing
-                            let literals = extract_numeric_literals(&eq_source);
-                            if !literals.is_empty() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("scrub:")
-                                            .size(10.0)
-                                            .color(Color32::from_rgb(130, 140, 160)),
-                                    );
-
-                                    for lit in literals {
-                                        let btn_label = format!("{:.3}", lit.value);
-                                        let chip_response = ui.add(
-                                            egui::Button::new(
-                                                egui::RichText::new(btn_label)
-                                                    .monospace()
-                                                    .size(10.5)
-                                                    .color(Color32::from_rgb(220, 230, 255)),
-                                            )
-                                            .fill(Color32::from_rgb(32, 36, 48))
-                                            .corner_radius(3.0),
-                                        );
-
-                                        // Drag scrub interaction
-                                        if chip_response.dragged() {
-                                            let drag_delta = chip_response.drag_delta().x;
-                                            let step = if ui.input(|i| i.modifiers.shift) {
-                                                0.01 // coarse
-                                            } else if ui
-                                                .input(|i| i.modifiers.ctrl || i.modifiers.command)
-                                            {
-                                                0.0001 // fine
-                                            } else {
-                                                0.001 // default
-                                            };
-
-                                            let new_val = lit.value + (drag_delta as f64) * step;
-                                            let formatted =
-                                                if new_val.abs() < 0.001 && new_val != 0.0 {
-                                                    format!("{:.5}", new_val)
-                                                } else {
-                                                    format!("{:.3}", new_val)
-                                                };
-
-                                            scrub_action = Some(EquationScrubAction {
-                                                eq_id,
-                                                span: lit.span,
-                                                new_value_str: formatted,
-                                            });
-                                        }
-
-                                        // Promote to parameter button
-                                        if ui
-                                            .add(egui::Button::image_and_text(
-                                                Icon::ArrowRight.image_tinted(
-                                                    10.0,
-                                                    Color32::from_rgb(180, 200, 240),
-                                                ),
-                                                "param",
-                                            ))
-                                            .on_hover_text(
-                                                "Promote this number to a named parameter",
-                                            )
-                                            .clicked()
-                                        {
-                                            let candidate_name =
-                                                find_available_param_name(&existing_params);
-                                            promote_action = Some(EquationPromoteAction {
-                                                eq_id,
-                                                span: lit.span,
-                                                param_name: candidate_name,
-                                                param_value: lit.value,
-                                            });
-                                        }
-                                    }
-                                });
-                            }
-
-                            // Initial condition editor for this target variable if parsed
-                            let target_var = extract_target_var(&eq_source);
-                            if let Some(ref var_name) = target_var {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!("{var_name}[0] ="))
-                                            .monospace()
-                                            .size(10.5)
-                                            .color(Color32::from_rgb(140, 150, 170)),
-                                    );
-                                    let mut init_val = doc
-                                        .state
-                                        .initial_conditions
-                                        .get(var_name)
-                                        .copied()
-                                        .unwrap_or(0.0);
-                                    if ui
-                                        .add(
-                                            egui::DragValue::new(&mut init_val)
-                                                .speed(0.05)
-                                                .max_decimals(3),
-                                        )
-                                        .changed()
-                                    {
-                                        init_cond_changes.push((var_name.clone(), init_val));
-                                    }
-                                });
+                            // Delete equation button
+                            if ui
+                                .add(egui::Button::image(
+                                    Icon::Close.image_tinted(9.0, Color32::from_rgb(180, 190, 210)),
+                                ))
+                                .on_hover_text("Remove equation")
+                                .clicked()
+                            {
+                                delete_eq_id = Some(eq_id);
                             }
                         });
-                },
-            );
 
-            ui.add_space(2.0);
+                        // Display inline parse error if any
+                        if let Some(err) = parse_err {
+                            ui.horizontal(|ui| {
+                                Icon::Alert.ui(ui, 11.0, Color32::from_rgb(255, 90, 90));
+                                ui.label(
+                                    egui::RichText::new(&err.message)
+                                        .color(Color32::from_rgb(255, 90, 90))
+                                        .size(10.5),
+                                );
+                            });
+                        }
+
+                        // Extract numeric literals for scrubbing
+                        let literals = extract_numeric_literals(&eq_source);
+                        if !literals.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new("scrub:")
+                                        .size(10.0)
+                                        .color(Color32::from_rgb(130, 140, 160)),
+                                );
+
+                                for lit in literals {
+                                    let btn_label = format!("{:.3}", lit.value);
+                                    let chip_response = ui.add(
+                                        egui::Button::new(
+                                            egui::RichText::new(btn_label)
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(Color32::from_rgb(220, 230, 255)),
+                                        )
+                                        .fill(Color32::from_rgb(32, 36, 48))
+                                        .corner_radius(3.0),
+                                    );
+
+                                    // Drag scrub interaction
+                                    if chip_response.dragged() {
+                                        let drag_delta = chip_response.drag_delta().x;
+                                        let step = if ui.input(|i| i.modifiers.shift) {
+                                            0.01 // coarse
+                                        } else if ui
+                                            .input(|i| i.modifiers.ctrl || i.modifiers.command)
+                                        {
+                                            0.0001 // fine
+                                        } else {
+                                            0.001 // default
+                                        };
+
+                                        let new_val = lit.value + (drag_delta as f64) * step;
+                                        let formatted = if new_val.abs() < 0.001 && new_val != 0.0 {
+                                            format!("{:.5}", new_val)
+                                        } else {
+                                            format!("{:.3}", new_val)
+                                        };
+
+                                        scrub_action = Some(EquationScrubAction {
+                                            eq_id,
+                                            span: lit.span,
+                                            new_value_str: formatted,
+                                        });
+                                    }
+
+                                    // Promote to parameter button
+                                    if ui
+                                        .add(egui::Button::image_and_text(
+                                            Icon::ArrowRight.image_tinted(
+                                                10.0,
+                                                Color32::from_rgb(180, 200, 240),
+                                            ),
+                                            "param",
+                                        ))
+                                        .on_hover_text("Promote this number to a named parameter")
+                                        .clicked()
+                                    {
+                                        let candidate_name =
+                                            find_available_param_name(&existing_params);
+                                        promote_action = Some(EquationPromoteAction {
+                                            eq_id,
+                                            span: lit.span,
+                                            param_name: candidate_name,
+                                            param_value: lit.value,
+                                        });
+                                    }
+                                }
+                            });
+                        }
+
+                        // Initial condition editor for this target variable if parsed
+                        let target_var = extract_target_var(&eq_source);
+                        if let Some(ref var_name) = target_var {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{var_name}[0] ="))
+                                        .monospace()
+                                        .size(10.5)
+                                        .color(Color32::from_rgb(140, 150, 170)),
+                                );
+                                let mut init_val = doc
+                                    .state
+                                    .initial_conditions
+                                    .get(var_name)
+                                    .copied()
+                                    .unwrap_or(0.0);
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut init_val)
+                                            .speed(0.05)
+                                            .max_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    init_cond_changes.push((var_name.clone(), init_val));
+                                }
+                            });
+                        }
+
+                        // Live term evaluation readout at cursor step n
+                        if let (Some(sim), Some(step)) = (sim_result, cursor_step) {
+                            if let Ok(parsed_eq) = crate::parser::parse_equation_str(&eq_source) {
+                                let params_map = doc.state.get_parameters_map();
+                                let ctx = crate::sim::SimResultContext {
+                                    sim_result: sim,
+                                    current_step: step,
+                                    parameters: &params_map,
+                                };
+                                let (overall_rhs, terms) =
+                                    crate::eval::collect_equation_term_evaluations(
+                                        &parsed_eq.rhs,
+                                        &ctx,
+                                    );
+
+                                if !terms.is_empty() || overall_rhs.is_some() {
+                                    ui.add_space(2.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("n={step}:"))
+                                                .size(10.0)
+                                                .monospace()
+                                                .color(Color32::from_rgb(0, 220, 255)),
+                                        );
+
+                                        for t in terms {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}={:.3}",
+                                                    t.label, t.value
+                                                ))
+                                                .size(10.0)
+                                                .monospace()
+                                                .color(Color32::from_rgb(180, 200, 230)),
+                                            );
+                                        }
+
+                                        if let Some(rhs_v) = overall_rhs {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "➔ next {}={:.3}",
+                                                    parsed_eq.target_var, rhs_v
+                                                ))
+                                                .size(10.0)
+                                                .monospace()
+                                                .strong()
+                                                .color(Color32::from_rgb(255, 220, 80)),
+                                            );
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    });
+            });
+
+            ui.add_space(3.0);
         }
 
         // Global dependency error notification

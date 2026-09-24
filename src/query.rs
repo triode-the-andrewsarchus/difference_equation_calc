@@ -1,6 +1,6 @@
 use crate::ast::Expr;
-use crate::eval::{eval_expr, SlicedContext};
-use crate::sim::SimulationResult;
+use crate::eval::eval_expr;
+use crate::sim::{SimResultContext, SimulationResult};
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -31,18 +31,12 @@ pub fn execute_search(
         return SearchResult::default();
     }
 
-    // Prepare history map for SlicedContext
-    let mut history_map: HashMap<String, Vec<f64>> = HashMap::new();
-    for (name, s) in &sim_result.series {
-        history_map.insert(name.clone(), s.values.clone());
-    }
-
     let mut mask = vec![false; sample_count];
     let mut total_matches = 0;
 
     for (n, slot) in mask.iter_mut().enumerate() {
-        let ctx = SlicedContext {
-            history: &history_map,
+        let ctx = SimResultContext {
+            sim_result,
             current_step: n,
             parameters,
         };
