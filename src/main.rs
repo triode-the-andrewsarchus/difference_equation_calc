@@ -12,6 +12,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Difference Equation Calculator",
         options,
-        Box::new(|cc| Ok(Box::new(DifferenceEquationApp::new(cc)))),
+        Box::new(|cc| {
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            Ok(Box::new(DifferenceEquationApp::new(cc)))
+        }),
     )
 }

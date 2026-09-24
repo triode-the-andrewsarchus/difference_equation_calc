@@ -1,4 +1,5 @@
 pub mod equation_view;
+pub mod icons;
 pub mod measure_view;
 pub mod params_view;
 pub mod search_bar;
@@ -12,6 +13,7 @@ use crate::query::{execute_search, SearchResult};
 use crate::sim::{run_simulation, SimulationResult};
 use crate::sweep::{execute_parameter_sweep, SweepResult};
 use crate::ui::equation_view::render_equation_list;
+use crate::ui::icons::Icon;
 use crate::ui::measure_view::render_measurements_panel;
 use crate::ui::params_view::render_parameters_panel;
 use crate::ui::search_bar::render_search_bar;
@@ -153,15 +155,24 @@ impl eframe::App for DifferenceEquationApp {
                 ui.separator();
 
                 // Undo / Redo
+                let undo_btn = egui::Button::image_and_text(
+                    Icon::Undo.image_tinted(13.0, Color32::from_rgb(200, 210, 230)),
+                    "Undo",
+                );
                 if ui
-                    .add_enabled(self.doc.can_undo(), egui::Button::new("↶ Undo"))
+                    .add_enabled(self.doc.can_undo(), undo_btn)
                     .on_hover_text("Undo (Ctrl+Z)")
                     .clicked()
                 {
                     self.doc.undo();
                 }
+
+                let redo_btn = egui::Button::image_and_text(
+                    Icon::Redo.image_tinted(13.0, Color32::from_rgb(200, 210, 230)),
+                    "Redo",
+                );
                 if ui
-                    .add_enabled(self.doc.can_redo(), egui::Button::new("↷ Redo"))
+                    .add_enabled(self.doc.can_redo(), redo_btn)
                     .on_hover_text("Redo (Ctrl+Y)")
                     .clicked()
                 {
@@ -171,8 +182,12 @@ impl eframe::App for DifferenceEquationApp {
                 ui.separator();
 
                 // Reset to Victor Demo
+                let reset_btn = egui::Button::image_and_text(
+                    Icon::Reset.image_tinted(13.0, Color32::from_rgb(200, 210, 230)),
+                    "Reset Demo",
+                );
                 if ui
-                    .button("Reset to Victor Demo")
+                    .add(reset_btn)
                     .on_hover_text(
                         "Reset equations and parameters to Bret Victor's oscillator demo",
                     )
@@ -188,7 +203,15 @@ impl eframe::App for DifferenceEquationApp {
                 ui.separator();
 
                 // Save JSON
-                if ui.button("Save JSON").clicked() {
+                let save_btn = egui::Button::image_and_text(
+                    Icon::Save.image_tinted(13.0, Color32::from_rgb(200, 210, 230)),
+                    "Save",
+                );
+                if ui
+                    .add(save_btn)
+                    .on_hover_text("Save session to JSON file")
+                    .clicked()
+                {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("JSON", &["json"])
                         .set_file_name("system_behavior.json")
@@ -203,7 +226,15 @@ impl eframe::App for DifferenceEquationApp {
                 }
 
                 // Load JSON
-                if ui.button("Load JSON").clicked() {
+                let load_btn = egui::Button::image_and_text(
+                    Icon::Folder.image_tinted(13.0, Color32::from_rgb(200, 210, 230)),
+                    "Load",
+                );
+                if ui
+                    .add(load_btn)
+                    .on_hover_text("Load session from JSON file")
+                    .clicked()
+                {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("JSON", &["json"])
                         .pick_file()

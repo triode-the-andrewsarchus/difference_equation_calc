@@ -1,4 +1,5 @@
 use crate::document::{Document, ParameterDoc};
+use crate::ui::icons::Icon;
 use egui::{Color32, Ui};
 
 pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document) {
@@ -10,7 +11,10 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document) {
             ui.heading(egui::RichText::new("Parameters").size(14.0).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button("+ Param")
+                    .add(egui::Button::image_and_text(
+                        Icon::Plus.image_tinted(11.0, Color32::from_rgb(200, 210, 230)),
+                        "Param",
+                    ))
                     .on_hover_text("Add new named parameter")
                     .clicked()
                 {
@@ -57,7 +61,9 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document) {
                     );
 
                     if ui
-                        .small_button("×")
+                        .add(egui::Button::image(
+                            Icon::Close.image_tinted(9.0, Color32::from_rgb(180, 190, 210)),
+                        ))
                         .on_hover_text("Delete parameter")
                         .clicked()
                     {

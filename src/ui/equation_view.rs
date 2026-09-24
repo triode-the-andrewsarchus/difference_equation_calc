@@ -3,6 +3,7 @@ use crate::deps::DependencyError;
 use crate::document::{Document, ParameterDoc};
 use crate::lexer::{Lexer, TokenKind};
 use crate::parser::ParseError;
+use crate::ui::icons::Icon;
 use crate::ui::waveforms::TRACE_COLORS;
 use egui::{vec2, Color32, Ui};
 use std::collections::HashMap;
@@ -45,7 +46,10 @@ pub fn render_equation_list(
             ui.heading(egui::RichText::new("Equations").size(15.0).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button("+ Add")
+                    .add(egui::Button::image_and_text(
+                        Icon::Plus.image_tinted(11.0, Color32::from_rgb(200, 210, 230)),
+                        "Add",
+                    ))
                     .on_hover_text("Add new recurrence equation")
                     .clicked()
                 {
@@ -96,7 +100,10 @@ pub fn render_equation_list(
 
                                 // Delete equation button
                                 if ui
-                                    .small_button("×")
+                                    .add(egui::Button::image(
+                                        Icon::Close
+                                            .image_tinted(9.0, Color32::from_rgb(180, 190, 210)),
+                                    ))
                                     .on_hover_text("Remove equation")
                                     .clicked()
                                 {
@@ -106,11 +113,14 @@ pub fn render_equation_list(
 
                             // Display inline parse error if any
                             if let Some(err) = parse_err {
-                                ui.label(
-                                    egui::RichText::new(format!("⚠ {}", err.message))
-                                        .color(Color32::from_rgb(255, 90, 90))
-                                        .size(10.5),
-                                );
+                                ui.horizontal(|ui| {
+                                    Icon::Alert.ui(ui, 11.0, Color32::from_rgb(255, 90, 90));
+                                    ui.label(
+                                        egui::RichText::new(&err.message)
+                                            .color(Color32::from_rgb(255, 90, 90))
+                                            .size(10.5),
+                                    );
+                                });
                             }
 
                             // Extract numeric literals for scrubbing
@@ -124,7 +134,7 @@ pub fn render_equation_list(
                                     );
 
                                     for lit in literals {
-                                        let btn_label = format!("{:.3} ↔", lit.value);
+                                        let btn_label = format!("{:.3}", lit.value);
                                         let chip_response = ui.add(
                                             egui::Button::new(
                                                 egui::RichText::new(btn_label)
@@ -166,7 +176,13 @@ pub fn render_equation_list(
 
                                         // Promote to parameter button
                                         if ui
-                                            .small_button("→param")
+                                            .add(egui::Button::image_and_text(
+                                                Icon::ArrowRight.image_tinted(
+                                                    10.0,
+                                                    Color32::from_rgb(180, 200, 240),
+                                                ),
+                                                "param",
+                                            ))
                                             .on_hover_text(
                                                 "Promote this number to a named parameter",
                                             )
@@ -223,11 +239,14 @@ pub fn render_equation_list(
         // Global dependency error notification
         if let Some(dep_err) = dep_error {
             ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(format!("⚠ Recurrence Error: {dep_err}"))
-                    .color(Color32::from_rgb(255, 100, 100))
-                    .size(11.0),
-            );
+            ui.horizontal(|ui| {
+                Icon::Alert.ui(ui, 12.0, Color32::from_rgb(255, 100, 100));
+                ui.label(
+                    egui::RichText::new(format!("Recurrence Error: {dep_err}"))
+                        .color(Color32::from_rgb(255, 100, 100))
+                        .size(11.0),
+                );
+            });
         }
     });
 

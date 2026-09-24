@@ -1,6 +1,7 @@
 use crate::document::Document;
 use crate::parser::ParseError;
 use crate::query::SearchResult;
+use crate::ui::icons::Icon;
 use egui::{Color32, Ui};
 
 pub fn render_search_bar(
@@ -10,8 +11,9 @@ pub fn render_search_bar(
     search_parse_error: Option<&ParseError>,
 ) {
     ui.horizontal(|ui| {
+        Icon::Search.ui(ui, 13.0, Color32::from_rgb(0, 220, 255));
         ui.label(
-            egui::RichText::new("🔍 Search:")
+            egui::RichText::new("Search:")
                 .strong()
                 .color(Color32::from_rgb(0, 220, 255)),
         );
@@ -25,8 +27,9 @@ pub fn render_search_bar(
 
         // Search match statistics badge
         if let Some(err) = search_parse_error {
+            Icon::Alert.ui(ui, 11.0, Color32::from_rgb(255, 90, 90));
             ui.label(
-                egui::RichText::new(format!("⚠ {}", err.message))
+                egui::RichText::new(&err.message)
                     .color(Color32::from_rgb(255, 90, 90))
                     .size(11.0),
             );
