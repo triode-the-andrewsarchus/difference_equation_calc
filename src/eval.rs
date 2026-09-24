@@ -330,6 +330,13 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
                 eval_expr(&args[2], ctx)
             }
         }
+        "clamp" => {
+            check_arg_count(func, args, 3)?;
+            let v = eval_expr(&args[0], ctx)?;
+            let min = eval_expr(&args[1], ctx)?;
+            let max = eval_expr(&args[2], ctx)?;
+            Ok(v.clamp(min, max))
+        }
         _ => Err(EvalError::UnknownFunction(func.to_string())),
     }
 }

@@ -105,8 +105,8 @@ pub fn render_phase_panel(
         let mut max_y = f64::NEG_INFINITY;
 
         for i in 0..n_pts {
-            let x = xs[i];
-            let y = ys[i];
+            let x = xs[i].clamp(-1.0, 1.0);
+            let y = ys[i].clamp(-1.0, 1.0);
             if x.is_finite() && y.is_finite() {
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
@@ -124,18 +124,18 @@ pub fn render_phase_panel(
             max_y = 1.0;
         }
 
-        // Add 12% padding
+        // Add padding while keeping within [-1.0, 1.0]
         let span_x = (max_x - min_x).max(1e-4);
         let span_y = (max_y - min_y).max(1e-4);
-        let max_span = span_x.max(span_y) * 1.15;
+        let max_span = span_x.max(span_y) * 1.08;
 
         let center_x = (min_x + max_x) * 0.5;
         let center_y = (min_y + max_y) * 0.5;
 
-        let plot_min_x = center_x - max_span * 0.5;
-        let plot_max_x = center_x + max_span * 0.5;
-        let plot_min_y = center_y - max_span * 0.5;
-        let plot_max_y = center_y + max_span * 0.5;
+        let plot_min_x = (center_x - max_span * 0.5).max(-1.0);
+        let plot_max_x = (center_x + max_span * 0.5).min(1.0);
+        let plot_min_y = (center_y - max_span * 0.5).max(-1.0);
+        let plot_max_y = (center_y + max_span * 0.5).min(1.0);
 
         let canvas_size = vec2(ui.available_width().max(200.0), 220.0);
         let (response, painter) = ui.allocate_painter(canvas_size, Sense::click_and_drag());
@@ -144,10 +144,12 @@ pub fn render_phase_panel(
         // Background
         painter.rect_filled(rect, 4.0_f32, Color32::from_rgb(18, 20, 26));
 
-        // Coordinate transforms
+        // Coordinate transforms clamped to [-1.0, 1.0]
         let to_screen = |x: f64, y: f64| -> egui::Pos2 {
-            let norm_x = (x - plot_min_x) / (plot_max_x - plot_min_x);
-            let norm_y = (y - plot_min_y) / (plot_max_y - plot_min_y);
+            let cx = x.clamp(-1.0, 1.0);
+            let cy = y.clamp(-1.0, 1.0);
+            let norm_x = (cx - plot_min_x) / (plot_max_x - plot_min_x).max(1e-6);
+            let norm_y = (cy - plot_min_y) / (plot_max_y - plot_min_y).max(1e-6);
             pos2(
                 rect.left() + (norm_x as f32) * rect.width(),
                 rect.bottom() - (norm_y as f32) * rect.height(),
@@ -274,11 +276,15 @@ pub fn render_phase_panel(
                     );
                     painter.circle_filled(p_cur, 4.5, Color32::from_rgb(255, 220, 50));
 
-                    // HUD readout
+                    // HUD readout clamped to [-1.0, 1.0]
                     painter.text(
                         pos2(rect.right() - 8.0, rect.top() + 8.0),
                         egui::Align2::RIGHT_TOP,
-                        format!("n={step}: ({:.3}, {:.3})", cur_x, cur_y),
+                        format!(
+                            "n={step}: ({:.3}, {:.3})",
+                            cur_x.clamp(-1.0, 1.0),
+                            cur_y.clamp(-1.0, 1.0)
+                        ),
                         FontId::monospace(10.5),
                         Color32::from_rgb(255, 230, 80),
                     );

@@ -377,8 +377,9 @@ fn render_single_row(
 
     for v in &values[start_idx..end_idx] {
         if v.is_finite() {
-            min_val = min_val.min(*v);
-            max_val = max_val.max(*v);
+            let clamped = v.clamp(-1.0, 1.0);
+            min_val = min_val.min(clamped);
+            max_val = max_val.max(clamped);
         }
     }
 
@@ -387,21 +388,18 @@ fn render_single_row(
         max_val = 1.0;
     }
 
-    // Ensure zero is nicely positioned and add padding
-    let abs_peak = min_val.abs().max(max_val.abs()).max(0.5);
+    // Always clamp plot range within -1.0 .. +1.0
+    let abs_peak = min_val.abs().max(max_val.abs()).clamp(0.1, 1.0);
     let plot_min = if min_val >= 0.0 && max_val <= 1.0 {
-        -0.1
+        -0.05
     } else {
-        -abs_peak * 1.15
+        (-abs_peak * 1.05).max(-1.0)
     };
-    let plot_max = if min_val >= 0.0 && max_val <= 1.0 {
-        1.1
-    } else {
-        abs_peak * 1.15
-    };
+    let plot_max = (abs_peak * 1.05).min(1.0);
 
     let y_to_screen = |val: f64| -> f32 {
-        let norm = (val - plot_min) / (plot_max - plot_min).max(1e-6);
+        let clamped = val.clamp(-1.0, 1.0);
+        let norm = (clamped - plot_min) / (plot_max - plot_min).max(1e-6);
         row_rect.bottom() - (norm as f32) * row_rect.height()
     };
 
@@ -557,10 +555,16 @@ fn draw_cursor_readout(
 
     for (i, row) in rows.iter().enumerate() {
         if let Some(&val) = row.values.get(step) {
+            let clamped_val = val.clamp(-1.0, 1.0);
             let label = if let Some(ghost) = row.ghost_values.and_then(|g| g.get(step)) {
-                format!("{}: {:.3} (ghost {:.3})", row.name, val, ghost)
+                format!(
+                    "{}: {:.3} (ghost {:.3})",
+                    row.name,
+                    clamped_val,
+                    ghost.clamp(-1.0, 1.0)
+                )
             } else {
-                format!("{}: {:.4}", row.name, val)
+                format!("{}: {:.4}", row.name, clamped_val)
             };
 
             painter.text(

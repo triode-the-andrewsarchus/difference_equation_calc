@@ -475,11 +475,11 @@ pub fn create_cascade_biquad_doc(
     if num_stages == 1 {
         // Standard 2-pole names for simplicity: y, b0, b1, b2, a1, a2
         let c = &cascade.stages[0];
+        let rhs_inner = "b0 * x[n+1] + b1 * x[n] + b2 * x[n-1] - a1 * y[n] - a2 * y[n-1]";
         let eq_src = if soft_saturation {
-            "y[n+1] = tanh(b0 * x[n+1] + b1 * x[n] + b2 * x[n-1] - a1 * y[n] - a2 * y[n-1])"
-                .to_string()
+            format!("y[n+1] = tanh({rhs_inner})")
         } else {
-            "y[n+1] = b0 * x[n+1] + b1 * x[n] + b2 * x[n-1] - a1 * y[n] - a2 * y[n-1]".to_string()
+            format!("y[n+1] = clamp({rhs_inner}, -1.0, 1.0)")
         };
         equations.push(EquationDoc {
             id: 2,
@@ -556,10 +556,10 @@ pub fn create_cascade_biquad_doc(
                 curr_var
             );
 
-            let eq_src = if is_final && soft_saturation {
+            let eq_src = if soft_saturation {
                 format!("{}[n+1] = tanh({})", curr_var, rhs_core)
             } else {
-                format!("{}[n+1] = {}", curr_var, rhs_core)
+                format!("{}[n+1] = clamp({}, -1.0, 1.0)", curr_var, rhs_core)
             };
 
             equations.push(EquationDoc {
@@ -668,15 +668,25 @@ pub fn create_cascade_svf_doc(
     initial_conditions.insert("x".to_string(), 0.0);
 
     if pole_count <= 2 {
+        let lp_src = if soft_saturation {
+            "lp[n+1] = tanh(lp[n] + f * bp[n])".to_string()
+        } else {
+            "lp[n+1] = clamp(lp[n] + f * bp[n], -1.0, 1.0)".to_string()
+        };
         let hp_src = if soft_saturation {
             "hp[n+1] = tanh(x[n+1] - lp[n+1] - q * bp[n])".to_string()
         } else {
-            "hp[n+1] = x[n+1] - lp[n+1] - q * bp[n]".to_string()
+            "hp[n+1] = clamp(x[n+1] - lp[n+1] - q * bp[n], -1.0, 1.0)".to_string()
+        };
+        let bp_src = if soft_saturation {
+            "bp[n+1] = tanh(bp[n] + f * hp[n+1])".to_string()
+        } else {
+            "bp[n+1] = clamp(bp[n] + f * hp[n+1], -1.0, 1.0)".to_string()
         };
 
         equations.push(EquationDoc {
             id: 2,
-            source: "lp[n+1] = lp[n] + f * bp[n]".to_string(),
+            source: lp_src,
             color_idx: 1,
         });
         equations.push(EquationDoc {
@@ -686,7 +696,7 @@ pub fn create_cascade_svf_doc(
         });
         equations.push(EquationDoc {
             id: 4,
-            source: "bp[n+1] = bp[n] + f * hp[n+1]".to_string(),
+            source: bp_src,
             color_idx: 3,
         });
 
@@ -710,31 +720,57 @@ pub fn create_cascade_svf_doc(
         });
     } else {
         // 4-pole SVF: 2 cascaded sections
+        let lp1_src = if soft_saturation {
+            "lp1[n+1] = tanh(lp1[n] + f1 * bp1[n])".to_string()
+        } else {
+            "lp1[n+1] = clamp(lp1[n] + f1 * bp1[n], -1.0, 1.0)".to_string()
+        };
+        let hp1_src = if soft_saturation {
+            "hp1[n+1] = tanh(x[n+1] - lp1[n+1] - q1 * bp1[n])".to_string()
+        } else {
+            "hp1[n+1] = clamp(x[n+1] - lp1[n+1] - q1 * bp1[n], -1.0, 1.0)".to_string()
+        };
+        let bp1_src = if soft_saturation {
+            "bp1[n+1] = tanh(bp1[n] + f1 * hp1[n+1])".to_string()
+        } else {
+            "bp1[n+1] = clamp(bp1[n] + f1 * hp1[n+1], -1.0, 1.0)".to_string()
+        };
+
         equations.push(EquationDoc {
             id: 2,
-            source: "lp1[n+1] = lp1[n] + f1 * bp1[n]".to_string(),
+            source: lp1_src,
             color_idx: 1,
         });
         equations.push(EquationDoc {
             id: 3,
-            source: "hp1[n+1] = x[n+1] - lp1[n+1] - q1 * bp1[n]".to_string(),
+            source: hp1_src,
             color_idx: 2,
         });
         equations.push(EquationDoc {
             id: 4,
-            source: "bp1[n+1] = bp1[n] + f1 * hp1[n+1]".to_string(),
+            source: bp1_src,
             color_idx: 3,
         });
 
+        let lp_src = if soft_saturation {
+            "lp[n+1] = tanh(lp[n] + f2 * bp[n])".to_string()
+        } else {
+            "lp[n+1] = clamp(lp[n] + f2 * bp[n], -1.0, 1.0)".to_string()
+        };
         let hp2_src = if soft_saturation {
             "hp[n+1] = tanh(lp1[n+1] - lp[n+1] - q2 * bp[n])".to_string()
         } else {
-            "hp[n+1] = lp1[n+1] - lp[n+1] - q2 * bp[n]".to_string()
+            "hp[n+1] = clamp(lp1[n+1] - lp[n+1] - q2 * bp[n], -1.0, 1.0)".to_string()
+        };
+        let bp_src = if soft_saturation {
+            "bp[n+1] = tanh(bp[n] + f2 * hp[n+1])".to_string()
+        } else {
+            "bp[n+1] = clamp(bp[n] + f2 * hp[n+1], -1.0, 1.0)".to_string()
         };
 
         equations.push(EquationDoc {
             id: 5,
-            source: "lp[n+1] = lp[n] + f2 * bp[n]".to_string(),
+            source: lp_src,
             color_idx: 4,
         });
         equations.push(EquationDoc {
@@ -744,7 +780,7 @@ pub fn create_cascade_svf_doc(
         });
         equations.push(EquationDoc {
             id: 7,
-            source: "bp[n+1] = bp[n] + f2 * hp[n+1]".to_string(),
+            source: bp_src,
             color_idx: 0,
         });
 

@@ -254,7 +254,8 @@ pub fn render_equation_list(
                                             ui.label(
                                                 egui::RichText::new(format!(
                                                     "{}={:.3}",
-                                                    t.label, t.value
+                                                    t.label,
+                                                    t.value.clamp(-1.0, 1.0)
                                                 ))
                                                 .size(10.0)
                                                 .monospace()
@@ -266,7 +267,8 @@ pub fn render_equation_list(
                                             ui.label(
                                                 egui::RichText::new(format!(
                                                     "➔ next {}={:.3}",
-                                                    parsed_eq.target_var, rhs_v
+                                                    parsed_eq.target_var,
+                                                    rhs_v.clamp(-1.0, 1.0)
                                                 ))
                                                 .size(10.0)
                                                 .monospace()

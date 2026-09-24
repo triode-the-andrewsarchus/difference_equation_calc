@@ -152,14 +152,14 @@ pub fn render_sweep_panel(
             let norm = ((sx - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0);
             p_min + (norm as f64) * (p_max - p_min)
         };
-
         match *sweep_mode {
             SweepMode::Measurement => {
-                let m_min = sweep_result.min_measure;
-                let m_max = sweep_result.max_measure;
+                let m_min = sweep_result.min_measure.clamp(-1.0, 1.0);
+                let m_max = sweep_result.max_measure.clamp(-1.0, 1.0);
 
                 let to_screen_y = |mval: f64| -> f32 {
-                    let norm = (mval - m_min) / (m_max - m_min).max(1e-6);
+                    let clamped = mval.clamp(m_min, m_max);
+                    let norm = (clamped - m_min) / (m_max - m_min).max(1e-6);
                     plot_rect.bottom() - (norm as f32) * plot_rect.height()
                 };
 
@@ -268,11 +268,12 @@ pub fn render_sweep_panel(
             }
             SweepMode::AttractorBifurcation => {
                 if let Some(attractor) = attractor_sweep {
-                    let s_min = attractor.state_min;
-                    let s_max = attractor.state_max;
+                    let s_min = attractor.state_min.clamp(-1.0, 1.0);
+                    let s_max = attractor.state_max.clamp(-1.0, 1.0);
 
                     let to_screen_y = |sval: f64| -> f32 {
-                        let norm = (sval - s_min) / (s_max - s_min).max(1e-6);
+                        let clamped = sval.clamp(s_min, s_max);
+                        let norm = (clamped - s_min) / (s_max - s_min).max(1e-6);
                         plot_rect.bottom() - (norm as f32) * plot_rect.height()
                     };
 

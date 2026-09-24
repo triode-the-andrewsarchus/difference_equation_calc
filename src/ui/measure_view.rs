@@ -97,12 +97,25 @@ pub fn render_measurements_panel(
                                             MeasurementType::Delta,
                                         ];
 
+                                        let clamp_m = |v: f64, m: MeasurementType| -> f64 {
+                                            match m {
+                                                MeasurementType::Range => v.clamp(0.0, 2.0),
+                                                MeasurementType::Delta => v.clamp(-2.0, 2.0),
+                                                MeasurementType::Rms => v.clamp(0.0, 1.0),
+                                                MeasurementType::Duration => v,
+                                                _ => v.clamp(-1.0, 1.0),
+                                            }
+                                        };
+
                                         for m_type in types_to_show {
                                             let spec = MeasurementSpec::new(var, m_type);
                                             let live_val =
-                                                calculate_measurement(&spec, sim_result, s0, s1);
+                                                calculate_measurement(&spec, sim_result, s0, s1)
+                                                    .map(|v| clamp_m(v, m_type));
                                             let ghost_val = ghost_sim.and_then(|g| {
-                                                calculate_measurement(&spec, g, s0, s1).ok()
+                                                calculate_measurement(&spec, g, s0, s1)
+                                                    .ok()
+                                                    .map(|v| clamp_m(v, m_type))
                                             });
 
                                             let val_str = match live_val {
