@@ -968,3 +968,261 @@ fn test_clamping_mode_and_hazard_zones() {
         "No zones should exceed 100.0 threshold"
     );
 }
+
+#[test]
+fn test_fir_filter_doc_simulation() {
+    use difference_equation_calc::filter::{
+        compute_fir_coeffs, create_fir_filter_doc, eval_fir_frequency_response, FilterType,
+        FirWindow, NonLinearityKind, StimulusType,
+    };
+    use difference_equation_calc::sim::run_simulation;
+
+    let taps = 31;
+    let fc = 0.12;
+    let coeffs = compute_fir_coeffs(FilterType::Lowpass, taps, fc, FirWindow::Hamming);
+    assert_eq!(coeffs.len(), taps);
+
+    // Symmetric FIR property: h[k] == h[M - 1 - k]
+    for k in 0..taps / 2 {
+        assert!(
+            (coeffs[k] - coeffs[taps - 1 - k]).abs() < 1e-12,
+            "FIR filter must have linear-phase symmetric coefficients"
+        );
+    }
+
+    // DC gain should be approximately 1.0 (0 dB) for lowpass filter
+    let (dc_db, _) = eval_fir_frequency_response(&coeffs, 0.0);
+    assert!(
+        (dc_db - 0.0).abs() < 0.5,
+        "DC gain of lowpass FIR should be close to 0 dB, got {dc_db}"
+    );
+
+    // Stopband rejection at Nyquist (omega = PI) should be deep (> 40 dB)
+    let (nyq_db, _) = eval_fir_frequency_response(&coeffs, std::f64::consts::PI);
+    assert!(
+        nyq_db < -35.0,
+        "Stopband rejection at Nyquist should be deep, got {nyq_db} dB"
+    );
+
+    // Generate causal difference equation document for FIR
+    let doc_state = create_fir_filter_doc(
+        FilterType::Lowpass,
+        taps,
+        fc,
+        FirWindow::Hamming,
+        StimulusType::Impulse,
+        NonLinearityKind::Clean,
+        1.0,
+    );
+
+    let (eqs, _) = doc_state.get_parsed_equations();
+    let params = doc_state.get_parameters_map();
+    let sim = run_simulation(
+        &eqs,
+        &doc_state.initial_conditions,
+        &params,
+        doc_state.sample_count,
+    )
+    .expect("FIR simulation setup failed");
+
+    assert!(
+        sim.failure.is_none(),
+        "FIR simulation failed: {:?}",
+        sim.failure
+    );
+
+    // The impulse response of the causal filter should match coefficients h_k
+    // Tap delay: impulse is at n=15 (x[16] = 1.0).
+    // Tap 0 is x[n+1], so at step 16, y receives h_0 * x[16] = h_0.
+    // At step 16 + k, y receives h_k.
+    for (k, &coeff) in coeffs.iter().enumerate() {
+        let step = 16 + k;
+        let y_val = sim.get_value("y", step).expect("Expected value for y");
+        assert!(
+            (y_val - coeff).abs() < 1e-4,
+            "Impulse response step {step} value {y_val} did not match coefficient h[{k}] = {}",
+            coeff
+        );
+    }
+}
+
+#[test]
+fn test_moog_ladder_simulation_and_resonance() {
+    use difference_equation_calc::filter::{
+        create_moog_ladder_doc, eval_moog_frequency_response, StimulusType,
+    };
+    use difference_equation_calc::sim::run_simulation;
+
+    // Test Moog frequency response: resonance should produce a pronounced peak relative to non-resonant
+    let mut clean_max = -120.0_f64;
+    let mut res_max = -120.0_f64;
+    for i in 1..80 {
+        let omega = 2.0 * std::f64::consts::PI * (i as f64 / 80.0) * 0.25;
+        let (c_db, _) = eval_moog_frequency_response(0.10, 0.0, omega);
+        let (r_db, _) = eval_moog_frequency_response(0.10, 0.95, omega);
+        if c_db > clean_max {
+            clean_max = c_db;
+        }
+        if r_db > res_max {
+            res_max = r_db;
+        }
+    }
+    let (res_dc, _) = eval_moog_frequency_response(0.10, 0.95, 0.0);
+    assert!(
+        res_max > res_dc + 6.0,
+        "Resonance should boost peak by > 6 dB above its DC passband, got DC {res_dc} dB vs peak {res_max} dB"
+    );
+
+    // Test Moog simulation with high resonance (self-oscillation)
+    let doc_state = create_moog_ladder_doc(
+        0.08,
+        1.05, // r >= 1.0 -> self-oscillation
+        1.0,
+        StimulusType::Impulse,
+    );
+
+    let (eqs, _) = doc_state.get_parsed_equations();
+    let params = doc_state.get_parameters_map();
+    let sim = run_simulation(&eqs, &doc_state.initial_conditions, &params, 400)
+        .expect("Moog simulation setup failed");
+
+    assert!(
+        sim.failure.is_none(),
+        "Moog simulation failed: {:?}",
+        sim.failure
+    );
+
+    // Ensure state stays bounded and non-exploding thanks to tanh saturation
+    for step in 50..400 {
+        let y4 = sim.get_value("y4", step).expect("Expected y4 value");
+        assert!(y4.is_finite(), "y4 went non-finite at step {step}");
+        assert!(y4.abs() <= 2.5, "y4 exploded beyond bound: {y4}");
+    }
+
+    // Check that self-oscillation is active (sustained non-zero amplitude long after impulse)
+    let mut max_abs_tail = 0.0_f64;
+    for step in 250..400 {
+        let y4 = sim.get_value("y4", step).unwrap();
+        if y4.abs() > max_abs_tail {
+            max_abs_tail = y4.abs();
+        }
+    }
+    assert!(
+        max_abs_tail > 0.05,
+        "Moog ladder should be self-oscillating in limit cycle at r=1.05, tail peak was {max_abs_tail}"
+    );
+}
+
+#[test]
+fn test_tb303_diode_ladder_simulation() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    use difference_equation_calc::sim::run_simulation;
+
+    let preset = get_preset_by_kind(PresetKind::Tb303DiodeLadder);
+    let doc_state = (preset.state_builder)();
+
+    let (eqs, _) = doc_state.get_parsed_equations();
+    let params = doc_state.get_parameters_map();
+    let sim = run_simulation(&eqs, &doc_state.initial_conditions, &params, 300)
+        .expect("TB-303 simulation setup failed");
+
+    assert!(
+        sim.failure.is_none(),
+        "TB-303 simulation failed: {:?}",
+        sim.failure
+    );
+
+    let acid_vals = &sim.series.get("acid").expect("Expected acid trace").values;
+    assert_eq!(acid_vals.len(), 300);
+
+    for (step, &val) in acid_vals.iter().enumerate() {
+        assert!(val.is_finite(), "TB-303 acid non-finite at step {step}");
+        assert!(
+            val.abs() <= 3.0,
+            "TB-303 acid unbounded at step {step}: {val}"
+        );
+    }
+}
+
+#[test]
+fn test_creative_nonlinear_options() {
+    use difference_equation_calc::filter::{
+        create_cascade_biquad_doc_ext, create_cascade_svf_doc_ext, create_fir_filter_doc,
+        FilterType, FirWindow, NonLinearPlacement, NonLinearityKind, StimulusType,
+    };
+    use difference_equation_calc::sim::run_simulation;
+
+    let test_nls = [
+        NonLinearityKind::Tanh,
+        NonLinearityKind::HardClip,
+        NonLinearityKind::Wavefold,
+        NonLinearityKind::SoftAlgebraic,
+        NonLinearityKind::AsymmetricHarmonic,
+        NonLinearityKind::Bitcrush,
+    ];
+
+    for nl in test_nls {
+        // Test in Biquad feedback
+        let biquad_doc = create_cascade_biquad_doc_ext(
+            FilterType::Lowpass,
+            2,
+            0.15,
+            12.0,
+            StimulusType::Step,
+            true,
+            nl,
+            1.8,
+            NonLinearPlacement::FeedbackLoop,
+        );
+        let (eqs, _) = biquad_doc.get_parsed_equations();
+        let params = biquad_doc.get_parameters_map();
+        let sim = run_simulation(&eqs, &biquad_doc.initial_conditions, &params, 120)
+            .expect("Biquad setup failed");
+        assert!(
+            sim.failure.is_none(),
+            "Biquad with {nl:?} failed: {:?}",
+            sim.failure
+        );
+
+        // Test in SVF between stages
+        let svf_doc = create_cascade_svf_doc_ext(
+            4,
+            0.12,
+            15.0,
+            StimulusType::Step,
+            true,
+            nl,
+            2.0,
+            NonLinearPlacement::BetweenStages,
+        );
+        let (eqs, _) = svf_doc.get_parsed_equations();
+        let params = svf_doc.get_parameters_map();
+        let sim = run_simulation(&eqs, &svf_doc.initial_conditions, &params, 120)
+            .expect("SVF setup failed");
+        assert!(
+            sim.failure.is_none(),
+            "SVF with {nl:?} failed: {:?}",
+            sim.failure
+        );
+
+        // Test in FIR output
+        let fir_doc = create_fir_filter_doc(
+            FilterType::Bandpass,
+            15,
+            0.20,
+            FirWindow::Hann,
+            StimulusType::Step,
+            nl,
+            2.5,
+        );
+        let (eqs, _) = fir_doc.get_parsed_equations();
+        let params = fir_doc.get_parameters_map();
+        let sim = run_simulation(&eqs, &fir_doc.initial_conditions, &params, 120)
+            .expect("FIR setup failed");
+        assert!(
+            sim.failure.is_none(),
+            "FIR with {nl:?} failed: {:?}",
+            sim.failure
+        );
+    }
+}

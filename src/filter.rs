@@ -78,17 +78,163 @@ impl std::ops::Div for Complex {
     }
 }
 
+impl std::ops::Mul<f64> for Complex {
+    type Output = Self;
+    fn mul(self, rhs: f64) -> Self {
+        Self {
+            re: self.re * rhs,
+            im: self.im * rhs,
+        }
+    }
+}
+
+impl std::ops::Div<f64> for Complex {
+    type Output = Self;
+    fn div(self, rhs: f64) -> Self {
+        Self {
+            re: self.re / rhs,
+            im: self.im / rhs,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterEngine {
     BiquadDirectForm2,
     ChamberlinSvf,
+    WindowedSincFir,
+    MoogLadder,
 }
 
 impl FilterEngine {
+    pub const ALL: [Self; 4] = [
+        Self::BiquadDirectForm2,
+        Self::ChamberlinSvf,
+        Self::WindowedSincFir,
+        Self::MoogLadder,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
             Self::BiquadDirectForm2 => "Direct Form II Biquad",
             Self::ChamberlinSvf => "Chamberlin State Variable (SVF)",
+            Self::WindowedSincFir => "Windowed Sinc FIR Filter",
+            Self::MoogLadder => "Moog 24dB Transistor Ladder",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirWindow {
+    Rectangular,
+    Hann,
+    Hamming,
+    Blackman,
+}
+
+impl FirWindow {
+    pub const ALL: [Self; 4] = [Self::Rectangular, Self::Hann, Self::Hamming, Self::Blackman];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rectangular => "Rectangular (Truncated)",
+            Self::Hann => "Hann (Smooth)",
+            Self::Hamming => "Hamming (Classic Audio)",
+            Self::Blackman => "Blackman (Deep Rejection)",
+        }
+    }
+
+    pub fn weight(self, i: usize, m: usize) -> f64 {
+        if m <= 1 {
+            return 1.0;
+        }
+        let n = i as f64;
+        let denom = (m - 1) as f64;
+        match self {
+            Self::Rectangular => 1.0,
+            Self::Hann => 0.5 - 0.5 * (2.0 * std::f64::consts::PI * n / denom).cos(),
+            Self::Hamming => 0.54 - 0.46 * (2.0 * std::f64::consts::PI * n / denom).cos(),
+            Self::Blackman => {
+                0.42 - 0.5 * (2.0 * std::f64::consts::PI * n / denom).cos()
+                    + 0.08 * (4.0 * std::f64::consts::PI * n / denom).cos()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonLinearityKind {
+    Clean,
+    Tanh,
+    HardClip,
+    Wavefold,
+    SoftAlgebraic,
+    AsymmetricHarmonic,
+    Bitcrush,
+}
+
+impl NonLinearityKind {
+    pub const ALL: [Self; 7] = [
+        Self::Clean,
+        Self::Tanh,
+        Self::HardClip,
+        Self::Wavefold,
+        Self::SoftAlgebraic,
+        Self::AsymmetricHarmonic,
+        Self::Bitcrush,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Clean => "Clean (Linear)",
+            Self::Tanh => "Tanh (Warm Tape/Tube)",
+            Self::HardClip => "Hard Clip (Diode/Rail)",
+            Self::Wavefold => "Wavefolder (Buchla Sine)",
+            Self::SoftAlgebraic => "Soft Drive (u / (1 + |u|))",
+            Self::AsymmetricHarmonic => "Asymmetric (2nd Harm)",
+            Self::Bitcrush => "Bitcrush (Lo-Fi Crunch)",
+        }
+    }
+
+    pub fn wrap_expr(self, inner: &str, drive: f64) -> String {
+        let drive_str = if (drive - 1.0).abs() < 1e-4 {
+            "".to_string()
+        } else {
+            format!("{:.3} * ", drive)
+        };
+        match self {
+            Self::Clean => inner.to_string(),
+            Self::Tanh => format!("tanh({drive_str}{inner})"),
+            Self::HardClip => format!("clamp({drive_str}{inner}, -1.0, 1.0)"),
+            Self::Wavefold => format!("sin({drive_str}({inner}) * 3.14159)"),
+            Self::SoftAlgebraic => {
+                format!("(({drive_str}({inner})) / (1.0 + abs({drive_str}({inner}))))")
+            }
+            Self::AsymmetricHarmonic => {
+                format!("(tanh({drive_str}({inner})) + 0.25 * tanh(({drive_str}({inner})) * ({drive_str}({inner}))))")
+            }
+            Self::Bitcrush => {
+                format!("(floor(({drive_str}({inner})) * 6.0) / 6.0)")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonLinearPlacement {
+    FeedbackLoop,
+    BetweenStages,
+    Output,
+}
+
+impl NonLinearPlacement {
+    pub const ALL: [Self; 3] = [Self::FeedbackLoop, Self::BetweenStages, Self::Output];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::FeedbackLoop => "Feedback Loop (Limit Cycle)",
+            Self::BetweenStages => "Between Poles (Ladder Stages)",
+            Self::Output => "Post Output",
         }
     }
 }
@@ -447,6 +593,127 @@ impl CascadeFilter {
     }
 }
 
+pub fn compute_fir_coeffs(
+    filter_type: FilterType,
+    num_taps: usize,
+    fc: f64,
+    window: FirWindow,
+) -> Vec<f64> {
+    let m = num_taps.clamp(3, 64);
+    let center = (m - 1) as f64 / 2.0;
+    let fc = fc.clamp(0.01, 0.49);
+
+    let mut h = Vec::with_capacity(m);
+
+    match filter_type {
+        FilterType::Lowpass => {
+            let mut sum = 0.0;
+            for i in 0..m {
+                let k = i as f64 - center;
+                let sinc = if k.abs() < 1e-8 {
+                    2.0 * fc
+                } else {
+                    (2.0 * std::f64::consts::PI * fc * k).sin() / (std::f64::consts::PI * k)
+                };
+                let val = sinc * window.weight(i, m);
+                sum += val;
+                h.push(val);
+            }
+            if sum.abs() > 1e-6 {
+                for v in &mut h {
+                    *v /= sum;
+                }
+            }
+        }
+        FilterType::Highpass => {
+            let mut lp = compute_fir_coeffs(FilterType::Lowpass, m, fc, window);
+            for (i, val) in lp.iter_mut().enumerate() {
+                let delta = if (i as f64 - center).abs() < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+                *val = delta - *val;
+            }
+            let mut nyq_gain = 0.0;
+            for (i, &v) in lp.iter().enumerate() {
+                let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+                nyq_gain += v * sign;
+            }
+            if nyq_gain.abs() > 1e-6 {
+                for v in &mut lp {
+                    *v /= nyq_gain.abs();
+                }
+            }
+            h = lp;
+        }
+        FilterType::Bandpass => {
+            let bw = (fc * 0.5).clamp(0.02, 0.3);
+            let f1 = (fc - bw * 0.5).clamp(0.01, 0.47);
+            let f2 = (fc + bw * 0.5).clamp(f1 + 0.01, 0.49);
+            let lp1 = compute_fir_coeffs(FilterType::Lowpass, m, f1, window);
+            let lp2 = compute_fir_coeffs(FilterType::Lowpass, m, f2, window);
+            for i in 0..m {
+                h.push(lp2[i] - lp1[i]);
+            }
+            let omega_c = 2.0 * std::f64::consts::PI * fc;
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for (k, &coeff) in h.iter().enumerate() {
+                re += coeff * (omega_c * k as f64).cos();
+                im -= coeff * (omega_c * k as f64).sin();
+            }
+            let mag = re.hypot(im);
+            if mag > 1e-6 {
+                for v in &mut h {
+                    *v /= mag;
+                }
+            }
+        }
+        FilterType::Notch => {
+            let bp = compute_fir_coeffs(FilterType::Bandpass, m, fc, window);
+            for (i, &v) in bp.iter().enumerate() {
+                let delta = if (i as f64 - center).abs() < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+                h.push(delta - v);
+            }
+        }
+    }
+
+    h
+}
+
+pub fn eval_fir_frequency_response(coeffs: &[f64], omega: f64) -> (f64, f64) {
+    let mut re = 0.0;
+    let mut im = 0.0;
+    for (k, &c) in coeffs.iter().enumerate() {
+        let angle = omega * k as f64;
+        re += c * angle.cos();
+        im -= c * angle.sin();
+    }
+    let mag = re.hypot(im);
+    let db = (20.0 * (mag + 1e-12).log10()).clamp(-120.0, 40.0);
+    let phase = im.atan2(re);
+    (db, phase)
+}
+
+pub fn eval_moog_frequency_response(fc: f64, r: f64, omega: f64) -> (f64, f64) {
+    let f = (2.0 * std::f64::consts::PI * fc.clamp(0.01, 0.45)).clamp(0.02, 0.85);
+    let z = Complex::from_polar(1.0, omega);
+    let denom_1 = z - Complex::new(1.0 - f, 0.0);
+    let h1 = Complex::new(f, 0.0) / denom_1;
+    let h4 = h1 * h1 * h1 * h1;
+    let fb_denom = Complex::ONE + Complex::new(4.0 * r, 0.0) * h4;
+    let h_cl = h4 / fb_denom;
+
+    let mag = h_cl.mag();
+    let db = (20.0 * (mag + 1e-12).log10()).clamp(-120.0, 40.0);
+    (db, h_cl.arg())
+}
+
 /// Generates a difference equation system document for a standard or multi-pole cascade biquad filter
 pub fn create_cascade_biquad_doc(
     filter_type: FilterType,
@@ -456,6 +723,36 @@ pub fn create_cascade_biquad_doc(
     stimulus: StimulusType,
     allow_self_osc: bool,
     soft_saturation: bool,
+) -> DocumentState {
+    let nl = if soft_saturation {
+        NonLinearityKind::Tanh
+    } else {
+        NonLinearityKind::HardClip
+    };
+    create_cascade_biquad_doc_ext(
+        filter_type,
+        pole_count,
+        fc,
+        q,
+        stimulus,
+        allow_self_osc,
+        nl,
+        1.0,
+        NonLinearPlacement::Output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_cascade_biquad_doc_ext(
+    filter_type: FilterType,
+    pole_count: usize,
+    fc: f64,
+    q: f64,
+    stimulus: StimulusType,
+    allow_self_osc: bool,
+    non_linear: NonLinearityKind,
+    drive: f64,
+    placement: NonLinearPlacement,
 ) -> DocumentState {
     let cascade = CascadeFilter::new(filter_type, pole_count, fc, q, allow_self_osc);
     let num_stages = cascade.stages.len();
@@ -473,14 +770,22 @@ pub fn create_cascade_biquad_doc(
     initial_conditions.insert("x".to_string(), 0.0);
 
     if num_stages == 1 {
-        // Standard 2-pole names for simplicity: y, b0, b1, b2, a1, a2
         let c = &cascade.stages[0];
-        let rhs_inner = "b0 * x[n+1] + b1 * x[n] + b2 * x[n-1] - a1 * y[n] - a2 * y[n-1]";
-        let eq_src = if soft_saturation {
-            format!("y[n+1] = tanh({rhs_inner})")
-        } else {
-            format!("y[n+1] = clamp({rhs_inner}, -1.0, 1.0)")
+        let eq_src = match placement {
+            NonLinearPlacement::FeedbackLoop if non_linear != NonLinearityKind::Clean => {
+                let fb = non_linear.wrap_expr("a1 * y[n] + a2 * y[n-1]", drive);
+                format!(
+                    "y[n+1] = clamp(b0 * x[n+1] + b1 * x[n] + b2 * x[n-1] - {}, -1.5, 1.5)",
+                    fb
+                )
+            }
+            _ => {
+                let rhs_inner = "b0 * x[n+1] + b1 * x[n] + b2 * x[n-1] - a1 * y[n] - a2 * y[n-1]";
+                let wrapped = non_linear.wrap_expr(rhs_inner, drive);
+                format!("y[n+1] = {wrapped}")
+            }
         };
+
         equations.push(EquationDoc {
             id: 2,
             source: eq_src,
@@ -524,7 +829,6 @@ pub fn create_cascade_biquad_doc(
             step: 0.001,
         });
     } else {
-        // Multi-stage cascade: y1, y2, ..., y
         let mut prev_var = "x".to_string();
         for k in 0..num_stages {
             let is_final = k == num_stages - 1;
@@ -542,24 +846,56 @@ pub fn create_cascade_biquad_doc(
             let a1_name = format!("a1_{}", stage_num);
             let a2_name = format!("a2_{}", stage_num);
 
-            let rhs_core = format!(
-                "{} * {}[n+1] + {} * {}[n] + {} * {}[n-1] - {} * {}[n] - {} * {}[n-1]",
-                b0_name,
-                prev_var,
-                b1_name,
-                prev_var,
-                b2_name,
-                prev_var,
-                a1_name,
-                curr_var,
-                a2_name,
-                curr_var
-            );
-
-            let eq_src = if soft_saturation {
-                format!("{}[n+1] = tanh({})", curr_var, rhs_core)
-            } else {
-                format!("{}[n+1] = clamp({}, -1.0, 1.0)", curr_var, rhs_core)
+            let eq_src = match placement {
+                NonLinearPlacement::FeedbackLoop if non_linear != NonLinearityKind::Clean => {
+                    let fb = non_linear.wrap_expr(
+                        &format!(
+                            "{} * {}[n] + {} * {}[n-1]",
+                            a1_name, curr_var, a2_name, curr_var
+                        ),
+                        drive,
+                    );
+                    format!(
+                        "{}[n+1] = clamp({} * {}[n+1] + {} * {}[n] + {} * {}[n-1] - {}, -1.5, 1.5)",
+                        curr_var, b0_name, prev_var, b1_name, prev_var, b2_name, prev_var, fb
+                    )
+                }
+                NonLinearPlacement::BetweenStages
+                    if !is_final && non_linear != NonLinearityKind::Clean =>
+                {
+                    let rhs_core = format!(
+                        "{} * {}[n+1] + {} * {}[n] + {} * {}[n-1] - {} * {}[n] - {} * {}[n-1]",
+                        b0_name,
+                        prev_var,
+                        b1_name,
+                        prev_var,
+                        b2_name,
+                        prev_var,
+                        a1_name,
+                        curr_var,
+                        a2_name,
+                        curr_var
+                    );
+                    let wrapped = non_linear.wrap_expr(&rhs_core, drive);
+                    format!("{}[n+1] = {wrapped}", curr_var)
+                }
+                _ => {
+                    let rhs_core = format!(
+                        "{} * {}[n+1] + {} * {}[n] + {} * {}[n-1] - {} * {}[n] - {} * {}[n-1]",
+                        b0_name,
+                        prev_var,
+                        b1_name,
+                        prev_var,
+                        b2_name,
+                        prev_var,
+                        a1_name,
+                        curr_var,
+                        a2_name,
+                        curr_var
+                    );
+                    let wrapped = non_linear.wrap_expr(&rhs_core, drive);
+                    format!("{}[n+1] = {wrapped}", curr_var)
+                }
             };
 
             equations.push(EquationDoc {
@@ -609,6 +945,16 @@ pub fn create_cascade_biquad_doc(
         }
     }
 
+    if non_linear != NonLinearityKind::Clean {
+        parameters.push(ParameterDoc {
+            name: "drive".to_string(),
+            value: drive,
+            min: 0.2,
+            max: 5.0,
+            step: 0.05,
+        });
+    }
+
     DocumentState {
         equations,
         initial_conditions,
@@ -649,9 +995,36 @@ pub fn create_cascade_svf_doc(
     allow_self_osc: bool,
     soft_saturation: bool,
 ) -> DocumentState {
+    let nl = if soft_saturation {
+        NonLinearityKind::Tanh
+    } else {
+        NonLinearityKind::HardClip
+    };
+    create_cascade_svf_doc_ext(
+        pole_count,
+        fc,
+        q,
+        stimulus,
+        allow_self_osc,
+        nl,
+        1.0,
+        NonLinearPlacement::Output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_cascade_svf_doc_ext(
+    pole_count: usize,
+    fc: f64,
+    q: f64,
+    stimulus: StimulusType,
+    allow_self_osc: bool,
+    non_linear: NonLinearityKind,
+    drive: f64,
+    placement: NonLinearPlacement,
+) -> DocumentState {
     let f_val = 2.0 * (std::f64::consts::PI * fc.clamp(0.01, 0.45)).sin();
     let q_damp = if allow_self_osc && q >= 25.0 {
-        // Self-oscillation in SVF: negative damping!
         -(q - 25.0) * 0.015
     } else {
         1.0 / q.clamp(0.2, 25.0)
@@ -669,20 +1042,30 @@ pub fn create_cascade_svf_doc(
     initial_conditions.insert("x".to_string(), 0.0);
 
     if pole_count <= 2 {
-        let lp_src = if soft_saturation {
-            "lp[n+1] = tanh(lp[n] + f * bp[n])".to_string()
-        } else {
-            "lp[n+1] = clamp(lp[n] + f * bp[n], -1.0, 1.0)".to_string()
-        };
-        let hp_src = if soft_saturation {
-            "hp[n+1] = tanh(x[n+1] - lp[n+1] - q * bp[n])".to_string()
-        } else {
-            "hp[n+1] = clamp(x[n+1] - lp[n+1] - q * bp[n], -1.0, 1.0)".to_string()
-        };
-        let bp_src = if soft_saturation {
-            "bp[n+1] = tanh(bp[n] + f * hp[n+1])".to_string()
-        } else {
-            "bp[n+1] = clamp(bp[n] + f * hp[n+1], -1.0, 1.0)".to_string()
+        let (lp_src, hp_src, bp_src) = match placement {
+            NonLinearPlacement::FeedbackLoop if non_linear != NonLinearityKind::Clean => {
+                let sat_hp = non_linear.wrap_expr("hp[n+1]", drive);
+                let sat_bp = non_linear.wrap_expr("bp[n]", drive);
+                (
+                    format!("lp[n+1] = lp[n] + f * {sat_bp}"),
+                    format!("hp[n+1] = x[n+1] - lp[n+1] - q * {sat_bp}"),
+                    format!("bp[n+1] = bp[n] + f * {sat_hp}"),
+                )
+            }
+            _ => (
+                format!(
+                    "lp[n+1] = {}",
+                    non_linear.wrap_expr("lp[n] + f * bp[n]", drive)
+                ),
+                format!(
+                    "hp[n+1] = {}",
+                    non_linear.wrap_expr("x[n+1] - lp[n+1] - q * bp[n]", drive)
+                ),
+                format!(
+                    "bp[n+1] = {}",
+                    non_linear.wrap_expr("bp[n] + f * hp[n+1]", drive)
+                ),
+            ),
         };
 
         equations.push(EquationDoc {
@@ -720,21 +1103,56 @@ pub fn create_cascade_svf_doc(
             step: 0.005,
         });
     } else {
-        // 4-pole SVF: 2 cascaded sections
-        let lp1_src = if soft_saturation {
-            "lp1[n+1] = tanh(lp1[n] + f1 * bp1[n])".to_string()
-        } else {
-            "lp1[n+1] = clamp(lp1[n] + f1 * bp1[n], -1.0, 1.0)".to_string()
+        let (lp1_src, hp1_src, bp1_src) = match placement {
+            NonLinearPlacement::FeedbackLoop if non_linear != NonLinearityKind::Clean => {
+                let sat_hp = non_linear.wrap_expr("hp1[n+1]", drive);
+                let sat_bp = non_linear.wrap_expr("bp1[n]", drive);
+                (
+                    format!("lp1[n+1] = lp1[n] + f1 * {sat_bp}"),
+                    format!("hp1[n+1] = x[n+1] - lp1[n+1] - q1 * {sat_bp}"),
+                    format!("bp1[n+1] = bp1[n] + f1 * {sat_hp}"),
+                )
+            }
+            _ => (
+                format!(
+                    "lp1[n+1] = {}",
+                    non_linear.wrap_expr("lp1[n] + f1 * bp1[n]", drive)
+                ),
+                format!(
+                    "hp1[n+1] = {}",
+                    non_linear.wrap_expr("x[n+1] - lp1[n+1] - q1 * bp1[n]", drive)
+                ),
+                format!(
+                    "bp1[n+1] = {}",
+                    non_linear.wrap_expr("bp1[n] + f1 * hp1[n+1]", drive)
+                ),
+            ),
         };
-        let hp1_src = if soft_saturation {
-            "hp1[n+1] = tanh(x[n+1] - lp1[n+1] - q1 * bp1[n])".to_string()
-        } else {
-            "hp1[n+1] = clamp(x[n+1] - lp1[n+1] - q1 * bp1[n], -1.0, 1.0)".to_string()
-        };
-        let bp1_src = if soft_saturation {
-            "bp1[n+1] = tanh(bp1[n] + f1 * hp1[n+1])".to_string()
-        } else {
-            "bp1[n+1] = clamp(bp1[n] + f1 * hp1[n+1], -1.0, 1.0)".to_string()
+
+        let (lp2_src, hp2_src, bp2_src) = match placement {
+            NonLinearPlacement::FeedbackLoop if non_linear != NonLinearityKind::Clean => {
+                let sat_hp = non_linear.wrap_expr("hp[n+1]", drive);
+                let sat_bp = non_linear.wrap_expr("bp[n]", drive);
+                (
+                    format!("lp[n+1] = lp[n] + f2 * {sat_bp}"),
+                    format!("hp[n+1] = lp1[n+1] - lp[n+1] - q2 * {sat_bp}"),
+                    format!("bp[n+1] = bp[n] + f2 * {sat_hp}"),
+                )
+            }
+            _ => (
+                format!(
+                    "lp[n+1] = {}",
+                    non_linear.wrap_expr("lp[n] + f2 * bp[n]", drive)
+                ),
+                format!(
+                    "hp[n+1] = {}",
+                    non_linear.wrap_expr("lp1[n+1] - lp[n+1] - q2 * bp[n]", drive)
+                ),
+                format!(
+                    "bp[n+1] = {}",
+                    non_linear.wrap_expr("bp[n] + f2 * hp[n+1]", drive)
+                ),
+            ),
         };
 
         equations.push(EquationDoc {
@@ -753,25 +1171,9 @@ pub fn create_cascade_svf_doc(
             color_idx: 3,
         });
 
-        let lp_src = if soft_saturation {
-            "lp[n+1] = tanh(lp[n] + f2 * bp[n])".to_string()
-        } else {
-            "lp[n+1] = clamp(lp[n] + f2 * bp[n], -1.0, 1.0)".to_string()
-        };
-        let hp2_src = if soft_saturation {
-            "hp[n+1] = tanh(lp1[n+1] - lp[n+1] - q2 * bp[n])".to_string()
-        } else {
-            "hp[n+1] = clamp(lp1[n+1] - lp[n+1] - q2 * bp[n], -1.0, 1.0)".to_string()
-        };
-        let bp_src = if soft_saturation {
-            "bp[n+1] = tanh(bp[n] + f2 * hp[n+1])".to_string()
-        } else {
-            "bp[n+1] = clamp(bp[n] + f2 * hp[n+1], -1.0, 1.0)".to_string()
-        };
-
         equations.push(EquationDoc {
             id: 5,
-            source: lp_src,
+            source: lp2_src,
             color_idx: 4,
         });
         equations.push(EquationDoc {
@@ -781,7 +1183,7 @@ pub fn create_cascade_svf_doc(
         });
         equations.push(EquationDoc {
             id: 7,
-            source: bp_src,
+            source: bp2_src,
             color_idx: 0,
         });
 
@@ -822,6 +1224,16 @@ pub fn create_cascade_svf_doc(
         });
     }
 
+    if non_linear != NonLinearityKind::Clean {
+        parameters.push(ParameterDoc {
+            name: "drive".to_string(),
+            value: drive,
+            min: 0.2,
+            max: 5.0,
+            step: 0.05,
+        });
+    }
+
     DocumentState {
         equations,
         initial_conditions,
@@ -846,4 +1258,287 @@ pub fn create_cascade_svf_doc(
 
 pub fn create_chamberlin_svf_doc(fc: f64, q: f64, stimulus: StimulusType) -> DocumentState {
     create_cascade_svf_doc(2, fc, q, stimulus, false, false)
+}
+
+pub fn create_fir_filter_doc(
+    filter_type: FilterType,
+    num_taps: usize,
+    fc: f64,
+    window: FirWindow,
+    stimulus: StimulusType,
+    non_linear: NonLinearityKind,
+    drive: f64,
+) -> DocumentState {
+    let coeffs = compute_fir_coeffs(filter_type, num_taps, fc, window);
+
+    let mut equations = Vec::new();
+    let mut initial_conditions = HashMap::new();
+    let mut parameters = Vec::new();
+
+    // Stimulus x
+    equations.push(EquationDoc {
+        id: 1,
+        source: stimulus.equation_source().to_string(),
+        color_idx: 0,
+    });
+    initial_conditions.insert("x".to_string(), 0.0);
+
+    let mut terms = Vec::new();
+    for (k, _) in coeffs.iter().enumerate() {
+        let h_name = format!("h{}", k);
+        let x_ref = match k {
+            0 => "x[n+1]".to_string(),
+            1 => "x[n]".to_string(),
+            _ => format!("x[n-{}]", k - 1),
+        };
+        terms.push(format!("{} * {}", h_name, x_ref));
+    }
+
+    let raw_sum = terms.join(" + ");
+    let eq_rhs = non_linear.wrap_expr(&raw_sum, drive);
+    let eq_source = format!("y[n+1] = {eq_rhs}");
+
+    equations.push(EquationDoc {
+        id: 2,
+        source: eq_source,
+        color_idx: 1,
+    });
+    initial_conditions.insert("y".to_string(), 0.0);
+
+    for (k, &c) in coeffs.iter().enumerate() {
+        parameters.push(ParameterDoc {
+            name: format!("h{}", k),
+            value: (c * 10000.0).round() / 10000.0,
+            min: -2.0,
+            max: 2.0,
+            step: 0.001,
+        });
+    }
+
+    if non_linear != NonLinearityKind::Clean {
+        parameters.push(ParameterDoc {
+            name: "drive".to_string(),
+            value: drive,
+            min: 0.2,
+            max: 5.0,
+            step: 0.05,
+        });
+    }
+
+    DocumentState {
+        equations,
+        initial_conditions,
+        parameters,
+        sample_count: 500,
+        selection: Some((10, 150)),
+        search_query: "y[n+1] > 0.0".to_string(),
+        sweep_config: SweepConfig {
+            parameter_name: "h0".to_string(),
+            measurement: MeasurementSpec::new("y", MeasurementType::Rms),
+            min_val: -1.0,
+            max_val: 1.0,
+            steps: 80,
+        },
+        clamping_mode: crate::document::ClampingMode::Unit,
+    }
+}
+
+pub fn create_moog_ladder_doc(
+    fc: f64,
+    resonance: f64,
+    drive: f64,
+    stimulus: StimulusType,
+) -> DocumentState {
+    let f_val = (2.0 * std::f64::consts::PI * fc.clamp(0.01, 0.45)).clamp(0.02, 0.85);
+
+    let equations = vec![
+        EquationDoc {
+            id: 1,
+            source: stimulus.equation_source().to_string(),
+            color_idx: 0,
+        },
+        EquationDoc {
+            id: 2,
+            source: "y1[n+1] = y1[n] + f * (tanh(u[n]) - tanh(y1[n]))".to_string(),
+            color_idx: 2,
+        },
+        EquationDoc {
+            id: 3,
+            source: "y2[n+1] = y2[n] + f * (tanh(y1[n]) - tanh(y2[n]))".to_string(),
+            color_idx: 3,
+        },
+        EquationDoc {
+            id: 4,
+            source: "y3[n+1] = y3[n] + f * (tanh(y2[n]) - tanh(y3[n]))".to_string(),
+            color_idx: 4,
+        },
+        EquationDoc {
+            id: 5,
+            source: "y4[n+1] = y4[n] + f * (tanh(y3[n]) - tanh(y4[n]))".to_string(),
+            color_idx: 5,
+        },
+        EquationDoc {
+            id: 6,
+            source: "u[n+1] = tanh(drive * (x[n+1] - 4.0 * r * y4[n+1]))".to_string(),
+            color_idx: 1,
+        },
+    ];
+
+    let mut initial_conditions = HashMap::new();
+    initial_conditions.insert("x".to_string(), 0.0);
+    initial_conditions.insert("u".to_string(), 0.0);
+    initial_conditions.insert("y1".to_string(), 0.0);
+    initial_conditions.insert("y2".to_string(), 0.0);
+    initial_conditions.insert("y3".to_string(), 0.0);
+    initial_conditions.insert("y4".to_string(), 0.0);
+
+    let parameters = vec![
+        ParameterDoc {
+            name: "f".to_string(),
+            value: (f_val * 1000.0).round() / 1000.0,
+            min: 0.02,
+            max: 0.85,
+            step: 0.005,
+        },
+        ParameterDoc {
+            name: "r".to_string(),
+            value: resonance.clamp(0.0, 1.4),
+            min: 0.0,
+            max: 1.4,
+            step: 0.01,
+        },
+        ParameterDoc {
+            name: "drive".to_string(),
+            value: drive.clamp(0.2, 4.0),
+            min: 0.2,
+            max: 4.0,
+            step: 0.05,
+        },
+    ];
+
+    DocumentState {
+        equations,
+        initial_conditions,
+        parameters,
+        sample_count: 600,
+        selection: Some((20, 160)),
+        search_query: "y4[n+1] > 0.0 and y4[n] <= 0.0".to_string(),
+        sweep_config: SweepConfig {
+            parameter_name: "r".to_string(),
+            measurement: MeasurementSpec::new("y4", MeasurementType::Rms),
+            min_val: 0.0,
+            max_val: 1.25,
+            steps: 120,
+        },
+        clamping_mode: crate::document::ClampingMode::Unit,
+    }
+}
+
+pub fn create_tb303_ladder_doc(
+    fc: f64,
+    resonance: f64,
+    drive: f64,
+    stimulus: StimulusType,
+) -> DocumentState {
+    let f_val = (2.0 * std::f64::consts::PI * fc.clamp(0.01, 0.45)).clamp(0.02, 0.85);
+
+    let equations = vec![
+        EquationDoc {
+            id: 1,
+            source: stimulus.equation_source().to_string(),
+            color_idx: 0,
+        },
+        EquationDoc {
+            id: 2,
+            source: "hpf[n+1] = y4[n] - hp_state[n]".to_string(),
+            color_idx: 1,
+        },
+        EquationDoc {
+            id: 3,
+            source: "hp_state[n+1] = hp_state[n] + 0.06 * hpf[n+1]".to_string(),
+            color_idx: 2,
+        },
+        EquationDoc {
+            id: 4,
+            source: "u[n+1] = tanh(drive * (x[n+1] - r * hpf[n+1]))".to_string(),
+            color_idx: 3,
+        },
+        EquationDoc {
+            id: 5,
+            source: "y1[n+1] = y1[n] + f * (tanh(u[n+1]) - y1[n])".to_string(),
+            color_idx: 4,
+        },
+        EquationDoc {
+            id: 6,
+            source: "y2[n+1] = y2[n] + (f * 0.95) * (y1[n+1] - y2[n])".to_string(),
+            color_idx: 5,
+        },
+        EquationDoc {
+            id: 7,
+            source: "y3[n+1] = y3[n] + (f * 0.85) * (y2[n+1] - y3[n])".to_string(),
+            color_idx: 6,
+        },
+        EquationDoc {
+            id: 8,
+            source: "y4[n+1] = y4[n] + (f * 0.75) * (y3[n+1] - y4[n])".to_string(),
+            color_idx: 7,
+        },
+        EquationDoc {
+            id: 9,
+            source: "acid[n+1] = tanh(1.6 * y4[n+1])".to_string(),
+            color_idx: 8,
+        },
+    ];
+
+    let mut initial_conditions = HashMap::new();
+    initial_conditions.insert("x".to_string(), 0.0);
+    initial_conditions.insert("hpf".to_string(), 0.0);
+    initial_conditions.insert("hp_state".to_string(), 0.0);
+    initial_conditions.insert("u".to_string(), 0.0);
+    initial_conditions.insert("y1".to_string(), 0.0);
+    initial_conditions.insert("y2".to_string(), 0.0);
+    initial_conditions.insert("y3".to_string(), 0.0);
+    initial_conditions.insert("y4".to_string(), 0.0);
+    initial_conditions.insert("acid".to_string(), 0.0);
+
+    let parameters = vec![
+        ParameterDoc {
+            name: "f".to_string(),
+            value: (f_val * 1000.0).round() / 1000.0,
+            min: 0.02,
+            max: 0.85,
+            step: 0.005,
+        },
+        ParameterDoc {
+            name: "r".to_string(),
+            value: resonance.clamp(0.0, 5.0),
+            min: 0.0,
+            max: 5.0,
+            step: 0.02,
+        },
+        ParameterDoc {
+            name: "drive".to_string(),
+            value: drive.clamp(0.2, 4.0),
+            min: 0.2,
+            max: 4.0,
+            step: 0.05,
+        },
+    ];
+
+    DocumentState {
+        equations,
+        initial_conditions,
+        parameters,
+        sample_count: 600,
+        selection: Some((20, 160)),
+        search_query: "acid[n+1] > 0.0".to_string(),
+        sweep_config: SweepConfig {
+            parameter_name: "r".to_string(),
+            measurement: MeasurementSpec::new("acid", MeasurementType::Range),
+            min_val: 0.5,
+            max_val: 4.8,
+            steps: 120,
+        },
+        clamping_mode: crate::document::ClampingMode::Unit,
+    }
 }

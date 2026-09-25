@@ -853,6 +853,16 @@ impl eframe::App for DifferenceEquationApp {
                     self.phase_state.var_y = "bp".to_string();
                     self.bifurcation_var = "f".to_string();
                 }
+                crate::filter::FilterEngine::WindowedSincFir => {
+                    self.phase_state.var_x = "x".to_string();
+                    self.phase_state.var_y = "y".to_string();
+                    self.bifurcation_var = "fc".to_string();
+                }
+                crate::filter::FilterEngine::MoogLadder => {
+                    self.phase_state.var_x = "y1".to_string();
+                    self.phase_state.var_y = "y4".to_string();
+                    self.bifurcation_var = "r".to_string();
+                }
             }
         }
         if filter_resp.export_code_requested {

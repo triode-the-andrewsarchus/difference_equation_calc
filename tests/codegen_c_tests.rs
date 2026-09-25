@@ -286,3 +286,79 @@ fn test_c_codegen_preset_resonant_biquad() {
         }
     }
 }
+
+#[test]
+fn test_c_codegen_preset_fir() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    let preset_spec = get_preset_by_kind(PresetKind::FirWindowedSinc);
+    let preset = (preset_spec.state_builder)();
+    let (equations, parse_errs) = preset.get_parsed_equations();
+    assert!(parse_errs.is_empty());
+
+    let params = preset.get_parameters_map();
+    let sample_count = 120;
+
+    let sim_result = run_simulation(
+        &equations,
+        &preset.initial_conditions,
+        &params,
+        sample_count,
+    )
+    .unwrap();
+    let model =
+        SystemModel::from_equations(&equations, &preset.initial_conditions, &params).unwrap();
+    let c_code = generate_c_standalone_runner(&model, sample_count).unwrap();
+    let c_result = run_c_harness(&c_code, sample_count).unwrap();
+
+    for var in &model.eval_order {
+        let sim_vals = &sim_result.series[var].values;
+        let c_vals = &c_result[var];
+        for step in 0..sample_count {
+            let diff = (sim_vals[step] - c_vals[step]).abs();
+            assert!(
+                diff < 1e-10,
+                "FIR mismatch for '{var}' at step {step}: sim={}, c={}, diff={diff}",
+                sim_vals[step],
+                c_vals[step]
+            );
+        }
+    }
+}
+
+#[test]
+fn test_c_codegen_preset_moog_ladder() {
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    let preset_spec = get_preset_by_kind(PresetKind::MoogLadder);
+    let preset = (preset_spec.state_builder)();
+    let (equations, parse_errs) = preset.get_parsed_equations();
+    assert!(parse_errs.is_empty());
+
+    let params = preset.get_parameters_map();
+    let sample_count = 150;
+
+    let sim_result = run_simulation(
+        &equations,
+        &preset.initial_conditions,
+        &params,
+        sample_count,
+    )
+    .unwrap();
+    let model =
+        SystemModel::from_equations(&equations, &preset.initial_conditions, &params).unwrap();
+    let c_code = generate_c_standalone_runner(&model, sample_count).unwrap();
+    let c_result = run_c_harness(&c_code, sample_count).unwrap();
+
+    for var in &model.eval_order {
+        let sim_vals = &sim_result.series[var].values;
+        let c_vals = &c_result[var];
+        for step in 0..sample_count {
+            let diff = (sim_vals[step] - c_vals[step]).abs();
+            assert!(
+                diff < 1e-10,
+                "Moog ladder mismatch for '{var}' at step {step}: sim={}, c={}, diff={diff}",
+                sim_vals[step],
+                c_vals[step]
+            );
+        }
+    }
+}

@@ -1,6 +1,8 @@
 use crate::document::Document;
 use crate::filter::{
-    pole_to_fc_q_ext, CascadeFilter, Complex, FilterEngine, FilterType, StimulusType,
+    compute_fir_coeffs, eval_fir_frequency_response, eval_moog_frequency_response,
+    pole_to_fc_q_ext, CascadeFilter, Complex, FilterEngine, FilterType, FirWindow,
+    NonLinearPlacement, NonLinearityKind, StimulusType,
 };
 use crate::ui::format::format_compact_value;
 use crate::ui::icons::Icon;
@@ -27,6 +29,12 @@ pub struct FilterDesignerState {
     pub sample_rate: f64,
     pub live_preview: bool,
     pub dragging: Option<DragTarget>,
+
+    pub fir_taps: usize,
+    pub fir_window: FirWindow,
+    pub non_linearity: NonLinearityKind,
+    pub non_linear_placement: NonLinearPlacement,
+    pub drive: f64,
 }
 
 impl Default for FilterDesignerState {
@@ -44,6 +52,12 @@ impl Default for FilterDesignerState {
             sample_rate: 48000.0,
             live_preview: true,
             dragging: None,
+
+            fir_taps: 31,
+            fir_window: FirWindow::Hamming,
+            non_linearity: NonLinearityKind::Clean,
+            non_linear_placement: NonLinearPlacement::FeedbackLoop,
+            drive: 1.0,
         }
     }
 }
@@ -98,73 +112,185 @@ pub fn render_filter_designer_window(
                 ui.separator();
 
                 ui.label(egui::RichText::new("Engine:").strong());
-                let is_biquad = state.engine == FilterEngine::BiquadDirectForm2;
-                if ui
-                    .selectable_label(is_biquad, "Biquad DF2")
-                    .on_hover_text("Direct Form II cascaded biquad difference equations")
-                    .clicked()
-                    && !is_biquad
-                {
-                    state.engine = FilterEngine::BiquadDirectForm2;
-                    state_changed = true;
-                }
-                let is_svf = state.engine == FilterEngine::ChamberlinSvf;
-                if ui
-                    .selectable_label(is_svf, "Chamberlin SVF")
-                    .on_hover_text("State-variable filter with simultaneous lowpass, bandpass, highpass outputs")
-                    .clicked()
-                    && !is_svf
-                {
-                    state.engine = FilterEngine::ChamberlinSvf;
-                    state_changed = true;
+                for eng in FilterEngine::ALL {
+                    let is_eng = state.engine == eng;
+                    let label = match eng {
+                        FilterEngine::BiquadDirectForm2 => "Biquad DF2",
+                        FilterEngine::ChamberlinSvf => "Chamberlin SVF",
+                        FilterEngine::WindowedSincFir => "Windowed FIR",
+                        FilterEngine::MoogLadder => "Moog 24dB Ladder",
+                    };
+                    if ui
+                        .selectable_label(is_eng, label)
+                        .on_hover_text(eng.name())
+                        .clicked()
+                        && !is_eng
+                    {
+                        state.engine = eng;
+                        state_changed = true;
+                    }
                 }
             });
 
             ui.separator();
 
-            // Row 2: Pole Count & Self-Oscillation Controls
+            // Row 2: Architecture Specific Controls (FIR Taps/Window vs Moog vs IIR Poles)
+            match state.engine {
+                FilterEngine::WindowedSincFir => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("FIR Taps:").strong());
+                        for taps in [15, 31, 47, 63] {
+                            let is_active = state.fir_taps == taps;
+                            if ui
+                                .selectable_label(is_active, format!("{taps} Taps"))
+                                .clicked()
+                                && !is_active
+                            {
+                                state.fir_taps = taps;
+                                state_changed = true;
+                            }
+                        }
+                        let mut taps = state.fir_taps;
+                        if ui
+                            .add(egui::Slider::new(&mut taps, 7..=99).step_by(2.0).text("Custom"))
+                            .changed()
+                        {
+                            state.fir_taps = if taps.is_multiple_of(2) { taps + 1 } else { taps };
+                            state_changed = true;
+                        }
+
+                        ui.separator();
+
+                        ui.label(egui::RichText::new("Window:").strong());
+                        for win in FirWindow::ALL {
+                            let is_active = state.fir_window == win;
+                            let short_name = match win {
+                                FirWindow::Rectangular => "Rect",
+                                FirWindow::Hann => "Hann",
+                                FirWindow::Hamming => "Hamming",
+                                FirWindow::Blackman => "Blackman",
+                            };
+                            if ui
+                                .selectable_label(is_active, short_name)
+                                .on_hover_text(win.name())
+                                .clicked()
+                                && !is_active
+                            {
+                                state.fir_window = win;
+                                state_changed = true;
+                            }
+                        }
+                    });
+                }
+                FilterEngine::MoogLadder => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Moog Architecture:").strong());
+                        ui.label(
+                            egui::RichText::new(
+                                "4-Pole 24dB/octave Ladder (Stilson-Smith / Huovilainen simulation with feedback)",
+                            )
+                            .color(Color32::from_rgb(180, 210, 240)),
+                        );
+                    });
+                }
+                FilterEngine::BiquadDirectForm2 | FilterEngine::ChamberlinSvf => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Poles:").strong());
+                        for p in [2, 4, 6, 8] {
+                            let is_active = state.pole_count == p;
+                            let label = format!("{}-Pole ({}dB)", p, p * 6);
+                            if ui
+                                .selectable_label(is_active, label)
+                                .on_hover_text(format!(
+                                    "Order {} ({} cascaded stages, {} dB/octave roll-off)",
+                                    p,
+                                    p / 2,
+                                    p * 6
+                                ))
+                                .clicked()
+                                && !is_active
+                            {
+                                state.pole_count = p;
+                                state_changed = true;
+                            }
+                        }
+
+                        ui.separator();
+
+                        if ui
+                            .checkbox(
+                                &mut state.allow_self_oscillation,
+                                "Self-Oscillation (|z| ≥ 1.0)",
+                            )
+                            .on_hover_text("Allow poles to move on/outside the unit circle for negative damping and autonomous limit cycles")
+                            .changed()
+                        {
+                            state_changed = true;
+                        }
+                    });
+                }
+            }
+
+            ui.separator();
+
+            // Row 2b: Creative Non-Linearity & Distortion (Between Poles / Feedback / Output)
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Poles:").strong());
-                for p in [2, 4, 6, 8] {
-                    let is_active = state.pole_count == p;
-                    let label = format!("{}-Pole ({}dB)", p, p * 6);
+                ui.label(egui::RichText::new("Non-Linear / Distortion:").strong());
+                for nl in NonLinearityKind::ALL {
+                    let is_active = state.non_linearity == nl;
+                    let label = match nl {
+                        NonLinearityKind::Clean => "Clean",
+                        NonLinearityKind::Tanh => "Tanh Tape",
+                        NonLinearityKind::HardClip => "Hard Clip",
+                        NonLinearityKind::Wavefold => "Wavefold",
+                        NonLinearityKind::SoftAlgebraic => "Soft Drive",
+                        NonLinearityKind::AsymmetricHarmonic => "Asymmetric 2nd",
+                        NonLinearityKind::Bitcrush => "Bitcrush",
+                    };
                     if ui
                         .selectable_label(is_active, label)
-                        .on_hover_text(format!(
-                            "Order {} ({} cascaded stages, {} dB/octave roll-off)",
-                            p,
-                            p / 2,
-                            p * 6
-                        ))
+                        .on_hover_text(nl.name())
                         .clicked()
                         && !is_active
                     {
-                        state.pole_count = p;
+                        state.non_linearity = nl;
                         state_changed = true;
                     }
                 }
-
-                ui.separator();
-
-                if ui
-                    .checkbox(
-                        &mut state.allow_self_oscillation,
-                        "Self-Oscillation (|z| ≥ 1.0)",
-                    )
-                    .on_hover_text("Allow poles to move on/outside the unit circle for negative damping and autonomous limit cycles")
-                    .changed()
-                {
-                    state_changed = true;
-                }
-
-                if ui
-                    .checkbox(&mut state.soft_saturation, "Soft Saturation (tanh)")
-                    .on_hover_text("Wrap feedback in tanh non-linearity to stabilize self-oscillation into a non-exploding limit cycle")
-                    .changed()
-                {
-                    state_changed = true;
-                }
             });
+
+            if state.non_linearity != NonLinearityKind::Clean {
+                ui.horizontal(|ui| {
+                    ui.label("Placement:");
+                    for pl in NonLinearPlacement::ALL {
+                        let is_active = state.non_linear_placement == pl;
+                        let label = match pl {
+                            NonLinearPlacement::FeedbackLoop => "In Feedback Loop",
+                            NonLinearPlacement::BetweenStages => "Between Poles",
+                            NonLinearPlacement::Output => "Post Output",
+                        };
+                        if ui
+                            .selectable_label(is_active, label)
+                            .on_hover_text(pl.name())
+                            .clicked()
+                            && !is_active
+                        {
+                            state.non_linear_placement = pl;
+                            state_changed = true;
+                        }
+                    }
+
+                    ui.separator();
+
+                    ui.label("Drive:");
+                    if ui
+                        .add(egui::Slider::new(&mut state.drive, 0.1..=5.0).step_by(0.1))
+                        .changed()
+                    {
+                        state_changed = true;
+                    }
+                });
+            }
 
             ui.separator();
 
@@ -206,7 +332,18 @@ pub fn render_filter_designer_window(
                 state.q,
                 state.allow_self_oscillation,
             );
-            let max_pole_mag = cascade.max_pole_mag();
+            let max_pole_mag = match state.engine {
+                FilterEngine::WindowedSincFir => 0.0,
+                FilterEngine::MoogLadder => {
+                    let r = (state.q / 25.0).clamp(0.0, 1.25);
+                    let f = 2.0 * PI * state.fc.clamp(0.01, 0.45);
+                    let p_mag = r.powf(0.25) * f;
+                    ((1.0 - f + p_mag * (PI / 4.0).cos()).powi(2)
+                        + (p_mag * (PI / 4.0).sin()).powi(2))
+                    .sqrt()
+                }
+                _ => cascade.max_pole_mag(),
+            };
 
             // Interactive Graphics Area: Z-Plane (Left) and Bode Plot (Right) using bounded columns
             let canvas_h = 240.0;
@@ -214,14 +351,26 @@ pub fn render_filter_designer_window(
                 // 1. Z-Domain Complex Unit Circle
                 let col0 = &mut cols[0];
                 let col0_w = col0.available_width();
-                col0.label(
-                    egui::RichText::new(format!(
+                let z_title = match state.engine {
+                    FilterEngine::WindowedSincFir => {
+                        format!("Z-Domain Plane (FIR: {} Taps, all poles at z=0)", state.fir_taps)
+                    }
+                    FilterEngine::MoogLadder => {
+                        format!(
+                            "Z-Domain Pole Plane (Moog 4-Pole, max |z| = {})",
+                            format_compact_value(max_pole_mag)
+                        )
+                    }
+                    _ => format!(
                         "Z-Domain Pole-Zero Plane ({}-Pole, max |z| = {})",
                         state.pole_count,
                         format_compact_value(max_pole_mag)
-                    ))
-                    .size(11.0)
-                    .color(Color32::from_rgb(180, 200, 230)),
+                    ),
+                };
+                col0.label(
+                    egui::RichText::new(z_title)
+                        .size(11.0)
+                        .color(Color32::from_rgb(180, 200, 230)),
                 );
 
                 let z_changed = render_zplane_canvas(
@@ -238,19 +387,29 @@ pub fn render_filter_designer_window(
                 let col1 = &mut cols[1];
                 let col1_w = col1.available_width();
                 let hz = state.fc * state.sample_rate;
-                col1.label(
-                    egui::RichText::new(format!(
+                let bode_title = match state.engine {
+                    FilterEngine::WindowedSincFir => {
+                        format!("Magnitude Response (FIR Windowed Sinc, Cutoff: {:.0} Hz)", hz)
+                    }
+                    FilterEngine::MoogLadder => {
+                        format!("Magnitude Response (Moog 24dB Ladder, Cutoff: {:.0} Hz)", hz)
+                    }
+                    _ => format!(
                         "Magnitude Response ({} dB/oct, Cutoff: {:.0} Hz)",
                         state.pole_count * 6,
                         hz
-                    ))
-                    .size(11.0)
-                    .color(Color32::from_rgb(180, 200, 230)),
+                    ),
+                };
+                col1.label(
+                    egui::RichText::new(bode_title)
+                        .size(11.0)
+                        .color(Color32::from_rgb(180, 200, 230)),
                 );
 
                 render_bode_plot_canvas(
                     col1,
                     vec2(col1_w, canvas_h - 18.0),
+                    state,
                     &cascade,
                     state.fc,
                     state.sample_rate,
@@ -282,40 +441,88 @@ pub fn render_filter_designer_window(
                         }
                     });
 
-                    // Q / Resonance factor slider
-                    ui.horizontal(|ui| {
-                        let q_max = if state.allow_self_oscillation {
-                            60.0
-                        } else {
-                            25.0
-                        };
-                        let q_desc = if max_pole_mag >= 1.0 {
-                            "Self-Oscillation (|z| ≥ 1.0)"
-                        } else if (state.q - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.05 {
-                            "Butterworth (flat)"
-                        } else if state.q > 5.0 {
-                            "High Resonance"
-                        } else if state.q < 0.5 {
-                            "Overdamped"
-                        } else {
-                            "Resonant"
-                        };
-
-                        ui.label("Resonance Q:");
-                        let mut q = state.q;
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut q, 0.2..=q_max)
-                                    .logarithmic(true)
-                                    .text(q_desc),
-                            )
-                            .on_hover_text("Filter quality factor Q (resonance factor)")
-                            .changed()
-                        {
-                            state.q = q;
-                            state_changed = true;
+                    // Q / Resonance / Tap count slider depending on engine
+                    match state.engine {
+                        FilterEngine::WindowedSincFir => {
+                            ui.horizontal(|ui| {
+                                ui.label("FIR Taps:");
+                                let mut taps = state.fir_taps;
+                                let taps_text = format!("{} taps (delay {})", taps, taps / 2);
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut taps, 7..=99)
+                                            .step_by(2.0)
+                                            .text(taps_text),
+                                    )
+                                    .changed()
+                                {
+                                    state.fir_taps =
+                                        if taps.is_multiple_of(2) { taps + 1 } else { taps };
+                                    state_changed = true;
+                                }
+                            });
                         }
-                    });
+                        FilterEngine::MoogLadder => {
+                            ui.horizontal(|ui| {
+                                ui.label("Resonance (r):");
+                                let mut r = (state.q / 25.0).clamp(0.0, 1.25);
+                                let desc = if r >= 1.0 {
+                                    "Self-Oscillation (4r >= 4.0)"
+                                } else if r > 0.75 {
+                                    "High Squelch"
+                                } else {
+                                    "Resonant"
+                                };
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut r, 0.0..=1.20)
+                                            .step_by(0.01)
+                                            .text(desc),
+                                    )
+                                    .on_hover_text("Feedback resonance factor r (oscillates at r >= 1.0)")
+                                    .changed()
+                                {
+                                    state.q = r * 25.0;
+                                    state_changed = true;
+                                }
+                            });
+                        }
+                        _ => {
+                            ui.horizontal(|ui| {
+                                let q_max = if state.allow_self_oscillation {
+                                    60.0
+                                } else {
+                                    25.0
+                                };
+                                let q_desc = if max_pole_mag >= 1.0 {
+                                    "Self-Oscillation (|z| ≥ 1.0)"
+                                } else if (state.q - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.05 {
+                                    "Butterworth (flat)"
+                                } else if state.q > 5.0 {
+                                    "High Resonance"
+                                } else if state.q < 0.5 {
+                                    "Overdamped"
+                                } else {
+                                    "Resonant"
+                                };
+
+                                ui.label("Resonance Q:");
+                                let mut q = state.q;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut q, 0.2..=q_max)
+                                            .logarithmic(true)
+                                            .text(q_desc),
+                                    )
+                                    .on_hover_text("Filter quality factor Q (resonance factor)")
+                                    .changed()
+                                {
+                                    state.q = q;
+                                    state_changed = true;
+                                }
+                            });
+                        }
+                    }
                 });
 
                 ui.separator();
@@ -401,6 +608,44 @@ pub fn render_filter_designer_window(
                                 .color(Color32::from_rgb(190, 200, 220)),
                             );
                         }
+                        FilterEngine::WindowedSincFir => {
+                            let coeffs = compute_fir_coeffs(
+                                state.filter_type,
+                                state.fir_taps,
+                                state.fc,
+                                state.fir_window,
+                            );
+                            let center_val = if !coeffs.is_empty() {
+                                coeffs[coeffs.len() / 2]
+                            } else {
+                                0.0
+                            };
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "M: {} taps   Window: {}\nCenter tap h[{}]: {:+.4}",
+                                    state.fir_taps,
+                                    state.fir_window.name(),
+                                    state.fir_taps / 2,
+                                    center_val
+                                ))
+                                .monospace()
+                                .size(11.0)
+                                .color(Color32::from_rgb(190, 200, 220)),
+                            );
+                        }
+                        FilterEngine::MoogLadder => {
+                            let f_param = 2.0 * PI * state.fc.clamp(0.01, 0.45);
+                            let r_param = (state.q / 25.0).clamp(0.0, 1.25);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "f: {:.4} (cutoff rate)\nr: {:.4} (feedback; >= 1.0 oscillates)",
+                                    f_param, r_param
+                                ))
+                                .monospace()
+                                .size(11.0)
+                                .color(Color32::from_rgb(190, 200, 220)),
+                            );
+                        }
                     }
                 });
             });
@@ -441,6 +686,11 @@ pub fn render_filter_designer_window(
                     state.pole_count = 2;
                     state.allow_self_oscillation = false;
                     state.soft_saturation = false;
+                    state.non_linearity = NonLinearityKind::Clean;
+                    state.non_linear_placement = NonLinearPlacement::FeedbackLoop;
+                    state.drive = 1.0;
+                    state.fir_taps = 31;
+                    state.fir_window = FirWindow::Hamming;
                     state_changed = true;
                 }
 
@@ -471,22 +721,41 @@ pub fn render_filter_designer_window(
 
 pub fn apply_filter_to_document(state: &FilterDesignerState, doc: &mut Document) {
     let new_doc_state = match state.engine {
-        FilterEngine::BiquadDirectForm2 => crate::filter::create_cascade_biquad_doc(
+        FilterEngine::BiquadDirectForm2 => crate::filter::create_cascade_biquad_doc_ext(
             state.filter_type,
             state.pole_count,
             state.fc,
             state.q,
             state.stimulus,
             state.allow_self_oscillation,
-            state.soft_saturation,
+            state.non_linearity,
+            state.drive,
+            state.non_linear_placement,
         ),
-        FilterEngine::ChamberlinSvf => crate::filter::create_cascade_svf_doc(
+        FilterEngine::ChamberlinSvf => crate::filter::create_cascade_svf_doc_ext(
             state.pole_count,
             state.fc,
             state.q,
             state.stimulus,
             state.allow_self_oscillation,
-            state.soft_saturation,
+            state.non_linearity,
+            state.drive,
+            state.non_linear_placement,
+        ),
+        FilterEngine::WindowedSincFir => crate::filter::create_fir_filter_doc(
+            state.filter_type,
+            state.fir_taps,
+            state.fc,
+            state.fir_window,
+            state.stimulus,
+            state.non_linearity,
+            state.drive,
+        ),
+        FilterEngine::MoogLadder => crate::filter::create_moog_ladder_doc(
+            state.fc,
+            (state.q / 25.0).clamp(0.0, 1.25),
+            state.drive,
+            state.stimulus,
         ),
     };
 
@@ -626,13 +895,15 @@ fn render_zplane_canvas(
         );
     }
 
-    // Draw Zeros as 'O' cyan circles
-    let zero_color = Color32::from_rgb(70, 220, 240);
-    for (z1, z2) in cascade.all_zeros() {
-        for z in [z1, z2] {
-            if z != Complex::ZERO {
-                let p = to_screen(z);
-                painter.circle_stroke(p, 5.0, Stroke::new(2.0_f32, zero_color));
+    // Draw Zeros as 'O' cyan circles (for IIR cascade)
+    if state.engine != FilterEngine::WindowedSincFir {
+        let zero_color = Color32::from_rgb(70, 220, 240);
+        for (z1, z2) in cascade.all_zeros() {
+            for z in [z1, z2] {
+                if z != Complex::ZERO {
+                    let p = to_screen(z);
+                    painter.circle_stroke(p, 5.0, Stroke::new(2.0_f32, zero_color));
+                }
             }
         }
     }
@@ -657,12 +928,40 @@ fn render_zplane_canvas(
         );
     };
 
-    // Draw all poles from all stages of the cascade
-    let all_poles = cascade.all_poles();
+    // Draw all poles from all stages of the cascade or simulated ladder
+    let all_poles: Vec<(Complex, Complex)> = match state.engine {
+        FilterEngine::WindowedSincFir => Vec::new(),
+        FilterEngine::MoogLadder => {
+            let f = 2.0 * PI * state.fc.clamp(0.01, 0.45);
+            let r = (state.q / 25.0).clamp(0.0, 1.25);
+            let p_mag = r.powf(0.25) * f;
+            let mut poles = Vec::new();
+            for k in 0..2 {
+                let angle = (2.0 * k as f64 + 1.0) * PI / 4.0;
+                let p1 = Complex::new(1.0 - f + p_mag * angle.cos(), p_mag * angle.sin());
+                let p2 = Complex::new(1.0 - f + p_mag * angle.cos(), -p_mag * angle.sin());
+                poles.push((p1, p2));
+            }
+            poles
+        }
+        _ => cascade.all_poles(),
+    };
     let mut pole_screen_positions = Vec::new();
 
+    if state.engine == FilterEngine::WindowedSincFir {
+        let center_s = to_screen(Complex::ZERO);
+        draw_x(&painter, center_s, Color32::from_rgb(140, 200, 255), false);
+        painter.text(
+            pos2(center_s.x + 8.0, center_s.y - 8.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{} poles at origin", state.fir_taps.saturating_sub(1)),
+            FontId::monospace(9.0),
+            Color32::from_rgb(160, 200, 240),
+        );
+    }
+
     for (stage_idx, (p1, p2)) in all_poles.iter().enumerate() {
-        let is_resonant = stage_idx == all_poles.len() - 1;
+        let is_resonant = stage_idx == all_poles.len().saturating_sub(1);
         let is_unstable = p1.mag() >= 1.0;
         let color = if is_unstable {
             Color32::from_rgb(255, 60, 60)
@@ -749,6 +1048,7 @@ fn render_zplane_canvas(
 fn render_bode_plot_canvas(
     ui: &mut Ui,
     size: Vec2,
+    state: &FilterDesignerState,
     cascade: &CascadeFilter,
     fc: f64,
     sample_rate: f64,
@@ -826,6 +1126,28 @@ fn render_bode_plot_canvas(
         );
     }
 
+    let fir_coeffs = if state.engine == FilterEngine::WindowedSincFir {
+        compute_fir_coeffs(
+            state.filter_type,
+            state.fir_taps,
+            state.fc,
+            state.fir_window,
+        )
+    } else {
+        Vec::new()
+    };
+
+    let eval_resp = |omega: f64| -> (f64, f64) {
+        match state.engine {
+            FilterEngine::WindowedSincFir => eval_fir_frequency_response(&fir_coeffs, omega),
+            FilterEngine::MoogLadder => {
+                let r = (state.q / 25.0).clamp(0.0, 1.25);
+                eval_moog_frequency_response(state.fc, r, omega)
+            }
+            _ => cascade.eval_frequency_response(omega),
+        }
+    };
+
     // Evaluate magnitude response across frequency spectrum
     let num_points = 180;
     let mut curve_points: Vec<Pos2> = Vec::with_capacity(num_points);
@@ -834,7 +1156,7 @@ fn render_bode_plot_canvas(
     for i in 0..num_points {
         let f_norm = (i as f64 / (num_points - 1) as f64) * 0.50;
         let omega = 2.0 * PI * f_norm;
-        let (mag_db, _) = cascade.eval_frequency_response(omega);
+        let (mag_db, _) = eval_resp(omega);
 
         let x = norm_f_to_x(f_norm);
         let y = db_to_y(mag_db);
@@ -863,7 +1185,7 @@ fn render_bode_plot_canvas(
 
     // Cutoff frequency indicator marker
     let fc_x = norm_f_to_x(fc);
-    let (fc_db, _) = cascade.eval_frequency_response(2.0 * PI * fc);
+    let (fc_db, _) = eval_resp(2.0 * PI * fc);
     let fc_y = db_to_y(fc_db);
 
     painter.line_segment(
@@ -878,7 +1200,7 @@ fn render_bode_plot_canvas(
         if plot_rect.contains(pos) {
             let t = ((pos.x - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0) as f64;
             let hover_f = t * 0.50;
-            let (hover_db, _) = cascade.eval_frequency_response(2.0 * PI * hover_f);
+            let (hover_db, _) = eval_resp(2.0 * PI * hover_f);
             let hover_y = db_to_y(hover_db);
 
             // Crosshair
@@ -891,12 +1213,18 @@ fn render_bode_plot_canvas(
             );
             painter.circle_filled(pos2(pos.x, hover_y), 3.5, Color32::from_rgb(255, 255, 255));
 
+            let desc = match state.engine {
+                FilterEngine::WindowedSincFir => format!("{} Taps FIR", state.fir_taps),
+                FilterEngine::MoogLadder => "4-Pole Moog Ladder".to_string(),
+                _ => format!("{} Poles", cascade.pole_count),
+            };
+
             response.on_hover_text(format!(
-                "Freq: {:.4} ({:.1} Hz)\nGain: {:+.2} dB ({} Poles)",
+                "Freq: {:.4} ({:.1} Hz)\nGain: {:+.2} dB ({})",
                 hover_f,
                 hover_f * sample_rate,
                 hover_db,
-                cascade.pole_count
+                desc
             ));
         }
     }

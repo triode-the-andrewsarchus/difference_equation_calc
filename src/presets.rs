@@ -14,6 +14,9 @@ pub enum PresetKind {
     ChamberlinSvf,
     ResonantBiquad,
     NotchFilter,
+    MoogLadder,
+    Tb303DiodeLadder,
+    FirWindowedSinc,
 }
 
 pub struct PresetSystem {
@@ -90,6 +93,30 @@ pub const ALL_PRESETS: &[PresetSystem] = &[
         name: "Notch Filter (Interference Rejection)",
         description: "Zero-pair on the unit circle eliminating interfering frequency components.",
         state_builder: notch_filter_preset,
+        default_phase_pair: ("x", "y"),
+    },
+    PresetSystem {
+        kind: PresetKind::MoogLadder,
+        name: "Moog 24dB Transistor Ladder (Non-linear 4-Pole)",
+        description:
+            "Classic 4-pole RC ladder with negative feedback saturation, driving into self-oscillation.",
+        state_builder: moog_ladder_preset,
+        default_phase_pair: ("y1", "y4"),
+    },
+    PresetSystem {
+        kind: PresetKind::Tb303DiodeLadder,
+        name: "Roland TB-303 Diode Ladder (Acid Squelch)",
+        description:
+            "Diode ladder with highpass resonance feedback coupling and screaming asymmetric squelch.",
+        state_builder: tb303_diode_ladder_preset,
+        default_phase_pair: ("y1", "acid"),
+    },
+    PresetSystem {
+        kind: PresetKind::FirWindowedSinc,
+        name: "Windowed Sinc FIR Lowpass (Linear Phase)",
+        description:
+            "16-tap causal FIR tapped delay line with Hann window and linear phase response.",
+        state_builder: fir_windowed_sinc_preset,
         default_phase_pair: ("x", "y"),
     },
 ];
@@ -437,5 +464,35 @@ fn notch_filter_preset() -> DocumentState {
         0.15,
         6.0,
         crate::filter::StimulusType::SineAndNoise,
+    )
+}
+
+fn moog_ladder_preset() -> DocumentState {
+    crate::filter::create_moog_ladder_doc(
+        0.12,
+        0.98,
+        1.25,
+        crate::filter::StimulusType::SineAndNoise,
+    )
+}
+
+fn tb303_diode_ladder_preset() -> DocumentState {
+    crate::filter::create_tb303_ladder_doc(
+        0.14,
+        3.2,
+        1.4,
+        crate::filter::StimulusType::SineAndNoise,
+    )
+}
+
+fn fir_windowed_sinc_preset() -> DocumentState {
+    crate::filter::create_fir_filter_doc(
+        crate::filter::FilterType::Lowpass,
+        16,
+        0.15,
+        crate::filter::FirWindow::Hann,
+        crate::filter::StimulusType::Step,
+        crate::filter::NonLinearityKind::Clean,
+        1.0,
     )
 }
