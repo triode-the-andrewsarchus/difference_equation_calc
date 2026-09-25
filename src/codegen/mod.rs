@@ -1,4 +1,5 @@
 pub mod c;
+pub mod rust;
 
 use crate::ast::{Equation, Expr, ExprKind};
 use crate::deps::{analyze_dependencies, DependencyError};
