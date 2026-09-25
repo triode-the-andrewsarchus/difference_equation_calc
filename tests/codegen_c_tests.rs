@@ -362,3 +362,60 @@ fn test_c_codegen_preset_moog_ladder() {
         }
     }
 }
+
+#[test]
+fn test_c_codegen_creative_distortions() {
+    use difference_equation_calc::filter::{
+        create_cascade_biquad_doc_ext, FilterType, NonLinearPlacement, NonLinearityKind,
+        StimulusType,
+    };
+
+    let distortions = [
+        NonLinearityKind::Wavefold,
+        NonLinearityKind::HardClip,
+        NonLinearityKind::Bitcrush,
+        NonLinearityKind::SoftAlgebraic,
+        NonLinearityKind::AsymmetricHarmonic,
+    ];
+
+    for nl in distortions {
+        let doc = create_cascade_biquad_doc_ext(
+            FilterType::Lowpass,
+            2,
+            0.15,
+            6.0,
+            StimulusType::Step,
+            true,
+            nl,
+            2.0,
+            NonLinearPlacement::FeedbackLoop,
+        );
+        let (equations, parse_errs) = doc.get_parsed_equations();
+        assert!(parse_errs.is_empty(), "Parse errors with distortion {nl:?}");
+
+        let params = doc.get_parameters_map();
+        let sample_count = 100;
+
+        let sim_result =
+            run_simulation(&equations, &doc.initial_conditions, &params, sample_count).unwrap();
+        let model =
+            SystemModel::from_equations(&equations, &doc.initial_conditions, &params).unwrap();
+        let c_code = generate_c_standalone_runner(&model, sample_count).unwrap();
+        let c_result = run_c_harness(&c_code, sample_count)
+            .unwrap_or_else(|e| panic!("C runner failed for {nl:?}:\n{e}"));
+
+        for var in &model.eval_order {
+            let sim_vals = &sim_result.series[var].values;
+            let c_vals = &c_result[var];
+            for step in 0..sample_count {
+                let diff = (sim_vals[step] - c_vals[step]).abs();
+                assert!(
+                    diff < 1e-10,
+                    "Distortion {nl:?} mismatch for '{var}' at step {step}: sim={}, c={}, diff={diff}",
+                    sim_vals[step],
+                    c_vals[step]
+                );
+            }
+        }
+    }
+}

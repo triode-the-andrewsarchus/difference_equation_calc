@@ -347,3 +347,60 @@ fn test_python_codegen_preset_moog_ladder() {
         }
     }
 }
+
+#[test]
+fn test_python_codegen_creative_distortions() {
+    use difference_equation_calc::filter::{
+        create_cascade_biquad_doc_ext, FilterType, NonLinearPlacement, NonLinearityKind,
+        StimulusType,
+    };
+
+    let distortions = [
+        NonLinearityKind::Wavefold,
+        NonLinearityKind::HardClip,
+        NonLinearityKind::Bitcrush,
+        NonLinearityKind::SoftAlgebraic,
+        NonLinearityKind::AsymmetricHarmonic,
+    ];
+
+    for nl in distortions {
+        let doc = create_cascade_biquad_doc_ext(
+            FilterType::Lowpass,
+            2,
+            0.15,
+            6.0,
+            StimulusType::Step,
+            true,
+            nl,
+            2.0,
+            NonLinearPlacement::FeedbackLoop,
+        );
+        let (equations, parse_errs) = doc.get_parsed_equations();
+        assert!(parse_errs.is_empty(), "Parse errors with distortion {nl:?}");
+
+        let params = doc.get_parameters_map();
+        let sample_count = 100;
+
+        let sim_result =
+            run_simulation(&equations, &doc.initial_conditions, &params, sample_count).unwrap();
+        let model =
+            SystemModel::from_equations(&equations, &doc.initial_conditions, &params).unwrap();
+        let py_code = generate_python_standalone_runner(&model, sample_count).unwrap();
+        let py_result = run_python_harness(&py_code, sample_count)
+            .unwrap_or_else(|e| panic!("Python runner failed for {nl:?}:\n{e}"));
+
+        for var in &model.eval_order {
+            let sim_vals = &sim_result.series[var].values;
+            let py_vals = &py_result[var];
+            for step in 0..sample_count {
+                let diff = (sim_vals[step] - py_vals[step]).abs();
+                assert!(
+                    diff < 1e-10,
+                    "Distortion {nl:?} mismatch for '{var}' at step {step}: sim={}, py={}, diff={diff}",
+                    sim_vals[step],
+                    py_vals[step]
+                );
+            }
+        }
+    }
+}
