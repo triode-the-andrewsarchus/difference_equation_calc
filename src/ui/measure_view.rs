@@ -1,6 +1,7 @@
 use crate::document::Document;
 use crate::measure::{calculate_measurement, MeasurementSpec, MeasurementType};
 use crate::sim::SimulationResult;
+use crate::ui::format::{format_compact_diff, format_compact_value};
 use crate::ui::waveforms::TRACE_COLORS;
 use egui::{vec2, Color32, Ui};
 
@@ -106,7 +107,7 @@ pub fn render_measurements_panel(
                                             });
 
                                             let val_str = match live_val {
-                                                Ok(v) => format!("{:.4}", v),
+                                                Ok(v) => format_compact_value(v),
                                                 Err(_) => "---".to_string(),
                                             };
 
@@ -133,10 +134,13 @@ pub fn render_measurements_panel(
                                                     Color32::from_rgb(255, 130, 100)
                                                 };
                                                 ui.label(
-                                                    egui::RichText::new(format!("Δ{:+.3}", diff))
-                                                        .monospace()
-                                                        .size(9.5)
-                                                        .color(diff_color),
+                                                    egui::RichText::new(format!(
+                                                        "Δ{}",
+                                                        format_compact_diff(diff)
+                                                    ))
+                                                    .monospace()
+                                                    .size(9.5)
+                                                    .color(diff_color),
                                                 );
                                             } else {
                                                 ui.label("");

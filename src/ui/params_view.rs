@@ -1,5 +1,6 @@
 use crate::ast::Equation;
 use crate::document::{Document, ParameterDoc};
+use crate::ui::format::format_compact_value;
 use crate::ui::icons::Icon;
 use egui::{pos2, Color32, Stroke, Ui};
 
@@ -110,7 +111,7 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
                     // Indicator if current parameter value produces clamping/clipping
                     if let Some(zone) = current_clipping {
                         let peak_str = if zone.max_peak.is_finite() {
-                            format!("{:.2}", zone.max_peak)
+                            format_compact_value(zone.max_peak)
                         } else {
                             "DIVERGES".to_string()
                         };
@@ -193,7 +194,9 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
                                 .color(label_color),
                         );
 
-                        let mut drag = egui::DragValue::new(val).speed(0.01).max_decimals(4);
+                        let mut drag = egui::DragValue::new(val)
+                            .speed(0.01)
+                            .custom_formatter(|n, _| format_compact_value(n));
 
                         if let Some(th) = clamp_th {
                             drag = drag.range(-th..=th);

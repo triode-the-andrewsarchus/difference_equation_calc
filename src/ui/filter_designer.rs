@@ -2,6 +2,7 @@ use crate::document::Document;
 use crate::filter::{
     pole_to_fc_q_ext, CascadeFilter, Complex, FilterEngine, FilterType, StimulusType,
 };
+use crate::ui::format::format_compact_value;
 use crate::ui::icons::Icon;
 use egui::{epaint::PathShape, pos2, vec2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::f64::consts::PI;
@@ -211,8 +212,9 @@ pub fn render_filter_designer_window(
                 let col0_w = col0.available_width();
                 col0.label(
                     egui::RichText::new(format!(
-                        "Z-Domain Pole-Zero Plane ({}-Pole, max |z| = {:.3})",
-                        state.pole_count, max_pole_mag
+                        "Z-Domain Pole-Zero Plane ({}-Pole, max |z| = {})",
+                        state.pole_count,
+                        format_compact_value(max_pole_mag)
                     ))
                     .size(11.0)
                     .color(Color32::from_rgb(180, 200, 230)),
@@ -319,17 +321,26 @@ pub fn render_filter_designer_window(
                     ui.horizontal(|ui| {
                         let (status_text, status_color) = if max_pole_mag < 0.999 {
                             (
-                                format!("STABLE (max |z| = {:.3} < 1.0)", max_pole_mag),
+                                format!(
+                                    "STABLE (max |z| = {} < 1.0)",
+                                    format_compact_value(max_pole_mag)
+                                ),
                                 Color32::from_rgb(80, 240, 140),
                             )
                         } else if max_pole_mag <= 1.002 {
                             (
-                                format!("SELF-OSCILLATING / MARGINAL (|z| = {:.3})", max_pole_mag),
+                                format!(
+                                    "SELF-OSCILLATING / MARGINAL (|z| = {})",
+                                    format_compact_value(max_pole_mag)
+                                ),
                                 Color32::from_rgb(255, 200, 50),
                             )
                         } else {
                             (
-                                format!("UNSTABLE / GROWING (max |z| = {:.3} ≥ 1.0)", max_pole_mag),
+                                format!(
+                                    "UNSTABLE / GROWING (max |z| = {} ≥ 1.0)",
+                                    format_compact_value(max_pole_mag)
+                                ),
                                 Color32::from_rgb(255, 80, 80),
                             )
                         };
@@ -702,12 +713,12 @@ fn render_zplane_canvas(
                     "Unstable (Exponential Growth)"
                 };
                 response.on_hover_text(format!(
-                    "Pole Stage {}/{}: z = {:.3} ± {:.3} j\n|z| = {:.3} ({})\nDrag to adjust Cutoff & Resonance",
+                    "Pole Stage {}/{}: z = {} ± {} j\n|z| = {} ({})\nDrag to adjust Cutoff & Resonance",
                     stage_idx + 1,
                     all_poles.len(),
-                    p.re,
-                    p.im.abs(),
-                    mag,
+                    format_compact_value(p.re),
+                    format_compact_value(p.im.abs()),
+                    format_compact_value(mag),
                     status_str
                 ));
                 break;

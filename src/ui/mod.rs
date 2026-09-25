@@ -1,5 +1,6 @@
 pub mod equation_view;
 pub mod filter_designer;
+pub mod format;
 pub mod icons;
 pub mod measure_view;
 pub mod params_view;
@@ -7,6 +8,8 @@ pub mod phase_view;
 pub mod search_bar;
 pub mod sweep_view;
 pub mod waveforms;
+
+pub use format::{format_compact_diff, format_compact_value};
 
 use crate::deps::analyze_dependencies;
 use crate::document::{ClampingMode, Document, DocumentState};
@@ -795,8 +798,9 @@ impl eframe::App for DifferenceEquationApp {
                                         self.doc.state.set_parameter_value(&param.name, val);
                                         self.status_message = Some((
                                             format!(
-                                                "Goal-seek: solved {} = {:.4}",
-                                                param.name, val
+                                                "Goal-seek: solved {} = {}",
+                                                param.name,
+                                                format_compact_value(val)
                                             ),
                                             2.5,
                                         ));

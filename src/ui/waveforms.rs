@@ -1,5 +1,6 @@
 use crate::query::SearchResult;
 use crate::sim::SimulationResult;
+use crate::ui::format::format_compact_value;
 use egui::{pos2, vec2, Color32, FontId, Painter, Rect, Response, Sense, Stroke, Ui};
 
 pub const TRACE_COLORS: [Color32; 6] = [
@@ -308,7 +309,7 @@ pub fn render_waveform_grid(
             painter.text(
                 pos2(x0 + 12.0, ptr.y - 10.0),
                 egui::Align2::LEFT_BOTTOM,
-                format!("{}[0] = {:.4}", var_name, new_val),
+                format!("{}[0] = {}", var_name, format_compact_value(new_val)),
                 FontId::monospace(11.0),
                 Color32::from_rgb(80, 240, 160),
             );
@@ -349,8 +350,10 @@ pub fn render_waveform_grid(
                     pos2(sx + 14.0, sy - 12.0),
                     egui::Align2::LEFT_BOTTOM,
                     format!(
-                        "Goal: {}[{}] = {:.4}",
-                        target_var, target_step, target_value
+                        "Goal: {}[{}] = {}",
+                        target_var,
+                        target_step,
+                        format_compact_value(target_value)
                     ),
                     FontId::monospace(11.0),
                     Color32::from_rgb(255, 220, 80),
@@ -610,7 +613,7 @@ fn render_single_row(
                 painter.text(
                     pos2(row_rect.right() - 6.0, top_rail_y + 2.0),
                     egui::Align2::RIGHT_TOP,
-                    format!("+{:.1} [RAIL]", th),
+                    format!("+{} [RAIL]", format_compact_value(th)),
                     FontId::monospace(8.5),
                     Color32::from_rgb(255, 90, 90),
                 );
@@ -629,7 +632,7 @@ fn render_single_row(
                 painter.text(
                     pos2(row_rect.right() - 6.0, bottom_rail_y - 2.0),
                     egui::Align2::RIGHT_BOTTOM,
-                    format!("-{:.1} [RAIL]", th),
+                    format!("-{} [RAIL]", format_compact_value(th)),
                     FontId::monospace(8.5),
                     Color32::from_rgb(255, 90, 90),
                 );
@@ -660,7 +663,7 @@ fn render_single_row(
         painter.text(
             badge_rect.center(),
             egui::Align2::CENTER_CENTER,
-            format!("CLAMPED (Peak: {:.2})", row.max_peak),
+            format!("CLAMPED (Peak: {})", format_compact_value(row.max_peak)),
             FontId::monospace(9.5),
             Color32::from_rgb(255, 230, 230),
         );
@@ -670,14 +673,14 @@ fn render_single_row(
     painter.text(
         pos2(row_rect.right() - 6.0, row_rect.top() + 4.0),
         egui::Align2::RIGHT_TOP,
-        format!("+{:.2}", plot_max),
+        format!("+{}", format_compact_value(plot_max)),
         FontId::monospace(9.0),
         Color32::from_rgb(90, 95, 110),
     );
     painter.text(
         pos2(row_rect.right() - 6.0, row_rect.bottom() - 4.0),
         egui::Align2::RIGHT_BOTTOM,
-        format!("{:.2}", plot_min),
+        format_compact_value(plot_min),
         FontId::monospace(9.0),
         Color32::from_rgb(90, 95, 110),
     );
@@ -821,7 +824,7 @@ fn draw_cursor_readout(
 
     for row in rows {
         if let Some(&val) = row.values.get(step) {
-            lines.push(format!("{}: {:.4}", row.name, val));
+            lines.push(format!("{}: {}", row.name, format_compact_value(val)));
         }
     }
 
@@ -870,11 +873,16 @@ fn draw_cursor_readout(
             };
 
             let label = if is_pt_clamped {
-                format!("{}: {:.3} [CLAMPED]", row.name, val)
+                format!("{}: {} [CLAMPED]", row.name, format_compact_value(val))
             } else if let Some(ghost) = row.ghost_values.and_then(|g| g.get(step)) {
-                format!("{}: {:.3} (ghost {:.3})", row.name, val, ghost)
+                format!(
+                    "{}: {} (ghost {})",
+                    row.name,
+                    format_compact_value(val),
+                    format_compact_value(*ghost)
+                )
             } else {
-                format!("{}: {:.4}", row.name, val)
+                format!("{}: {}", row.name, format_compact_value(val))
             };
 
             let color = if is_pt_clamped {

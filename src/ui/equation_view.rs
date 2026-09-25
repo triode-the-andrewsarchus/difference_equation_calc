@@ -4,6 +4,7 @@ use crate::document::{Document, ParameterDoc};
 use crate::lexer::{Lexer, TokenKind};
 use crate::parser::ParseError;
 use crate::sim::SimulationResult;
+use crate::ui::format::format_compact_value;
 use crate::ui::icons::Icon;
 use crate::ui::waveforms::TRACE_COLORS;
 use egui::{vec2, Color32, Ui};
@@ -253,8 +254,9 @@ pub fn render_equation_list(
                                         for t in terms {
                                             ui.label(
                                                 egui::RichText::new(format!(
-                                                    "{}={:.3}",
-                                                    t.label, t.value
+                                                    "{}={}",
+                                                    t.label,
+                                                    format_compact_value(t.value)
                                                 ))
                                                 .size(10.0)
                                                 .monospace()
@@ -265,8 +267,9 @@ pub fn render_equation_list(
                                         if let Some(rhs_v) = overall_rhs {
                                             ui.label(
                                                 egui::RichText::new(format!(
-                                                    "➔ next {}={:.3}",
-                                                    parsed_eq.target_var, rhs_v
+                                                    "➔ next {}={}",
+                                                    parsed_eq.target_var,
+                                                    format_compact_value(rhs_v)
                                                 ))
                                                 .size(10.0)
                                                 .monospace()

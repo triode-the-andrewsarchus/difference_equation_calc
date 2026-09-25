@@ -1,5 +1,6 @@
 use crate::document::Document;
 use crate::sweep::{AttractorSweepResult, SweepMode, SweepResult};
+use crate::ui::format::format_compact_value;
 use egui::{pos2, vec2, Color32, FontId, Rect, Sense, Stroke, Ui};
 
 pub struct SweepPlotResponse {
@@ -178,14 +179,14 @@ pub fn render_sweep_panel(
                 painter.text(
                     pos2(rect.left() + 6.0, plot_rect.top()),
                     egui::Align2::LEFT_TOP,
-                    format!("{:.3}", m_max),
+                    format_compact_value(m_max),
                     FontId::monospace(9.5),
                     Color32::from_rgb(120, 130, 150),
                 );
                 painter.text(
                     pos2(rect.left() + 6.0, plot_rect.bottom()),
                     egui::Align2::LEFT_BOTTOM,
-                    format!("{:.3}", m_min),
+                    format_compact_value(m_min),
                     FontId::monospace(9.5),
                     Color32::from_rgb(120, 130, 150),
                 );
@@ -263,10 +264,13 @@ pub fn render_sweep_panel(
                     painter.circle_filled(pos2(cur_x, cur_y), 4.5, Color32::from_rgb(255, 215, 90));
 
                     let readout_label = format!(
-                        "{} = {:.4}{}",
+                        "{} = {}{}",
                         doc.state.sweep_config.parameter_name,
-                        current_param_val,
-                        interp_m.map_or("".to_string(), |m| format!(", M = {:.4}", m))
+                        format_compact_value(current_param_val),
+                        interp_m.map_or("".to_string(), |m| format!(
+                            ", M = {}",
+                            format_compact_value(m)
+                        ))
                     );
                     painter.text(
                         pos2(cur_x + 8.0, cur_y - 12.0),
@@ -303,14 +307,14 @@ pub fn render_sweep_panel(
                     painter.text(
                         pos2(rect.left() + 6.0, plot_rect.top()),
                         egui::Align2::LEFT_TOP,
-                        format!("{:.3}", s_max),
+                        format_compact_value(s_max),
                         FontId::monospace(9.5),
                         Color32::from_rgb(120, 130, 150),
                     );
                     painter.text(
                         pos2(rect.left() + 6.0, plot_rect.bottom()),
                         egui::Align2::LEFT_BOTTOM,
-                        format!("{:.3}", s_min),
+                        format_compact_value(s_min),
                         FontId::monospace(9.5),
                         Color32::from_rgb(120, 130, 150),
                     );
@@ -355,8 +359,9 @@ pub fn render_sweep_panel(
                             pos2(cur_x + 6.0, plot_rect.top() + 4.0),
                             egui::Align2::LEFT_TOP,
                             format!(
-                                "{} = {:.4}",
-                                doc.state.sweep_config.parameter_name, current_param_val
+                                "{} = {}",
+                                doc.state.sweep_config.parameter_name,
+                                format_compact_value(current_param_val)
                             ),
                             FontId::monospace(10.5),
                             Color32::from_rgb(255, 235, 140),
@@ -378,14 +383,14 @@ pub fn render_sweep_panel(
         painter.text(
             pos2(plot_rect.left(), plot_rect.bottom() + 4.0),
             egui::Align2::LEFT_TOP,
-            format!("{:.3}", p_min),
+            format_compact_value(p_min),
             FontId::monospace(9.5),
             Color32::from_rgb(120, 130, 150),
         );
         painter.text(
             pos2(plot_rect.right(), plot_rect.bottom() + 4.0),
             egui::Align2::RIGHT_TOP,
-            format!("{:.3}", p_max),
+            format_compact_value(p_max),
             FontId::monospace(9.5),
             Color32::from_rgb(120, 130, 150),
         );

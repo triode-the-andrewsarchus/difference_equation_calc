@@ -1,5 +1,6 @@
 use crate::ast::Equation;
 use crate::sim::{compute_phase_field, SimulationResult};
+use crate::ui::format::format_compact_value;
 use egui::{pos2, vec2, Color32, FontId, Rect, Sense, Stroke, StrokeKind, Ui};
 use std::collections::HashMap;
 
@@ -340,7 +341,7 @@ pub fn render_phase_panel(
                 painter.text(
                     pos2(rail_rect.right() - 4.0, rail_rect.top() + 4.0),
                     egui::Align2::RIGHT_TOP,
-                    format!("RAILS (±{:.1}) [CLAMPED]", th),
+                    format!("RAILS (±{}) [CLAMPED]", format_compact_value(th)),
                     FontId::monospace(8.5),
                     Color32::from_rgb(255, 90, 90),
                 );
@@ -451,9 +452,17 @@ pub fn render_phase_panel(
                     };
 
                     let readout = if is_pt_clamped {
-                        format!("n={step}: ({:.3}, {:.3}) [CLAMPED]", cur_x, cur_y)
+                        format!(
+                            "n={step}: ({}, {}) [CLAMPED]",
+                            format_compact_value(cur_x),
+                            format_compact_value(cur_y)
+                        )
                     } else {
-                        format!("n={step}: ({:.3}, {:.3})", cur_x, cur_y)
+                        format!(
+                            "n={step}: ({}, {})",
+                            format_compact_value(cur_x),
+                            format_compact_value(cur_y)
+                        )
                     };
 
                     painter.text(
@@ -500,8 +509,11 @@ pub fn render_phase_panel(
                     pos2(ptr.x + 10.0, ptr.y - 10.0),
                     egui::Align2::LEFT_BOTTOM,
                     format!(
-                        "({}, {}) = ({:.3}, {:.3})",
-                        state.var_x, state.var_y, new_x, new_y
+                        "({}, {}) = ({}, {})",
+                        state.var_x,
+                        state.var_y,
+                        format_compact_value(new_x),
+                        format_compact_value(new_y)
                     ),
                     FontId::monospace(10.0),
                     Color32::from_rgb(255, 230, 80),
