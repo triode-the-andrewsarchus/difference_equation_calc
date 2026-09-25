@@ -133,7 +133,7 @@ pub fn render_equation_list(
                                 );
 
                                 for lit in literals {
-                                    let btn_label = format!("{:.3}", lit.value);
+                                    let btn_label = format_compact_value(lit.value);
                                     let chip_response = ui.add(
                                         egui::Button::new(
                                             egui::RichText::new(btn_label)
@@ -200,28 +200,58 @@ pub fn render_equation_list(
                         // Initial condition editor for this target variable if parsed
                         let target_var = extract_target_var(&eq_source);
                         if let Some(ref var_name) = target_var {
+                            let clamp_th = doc.state.clamping_mode.threshold();
+                            let mut init_val = doc
+                                .state
+                                .initial_conditions
+                                .get(var_name)
+                                .copied()
+                                .unwrap_or(0.0);
+                            let is_init_clamped = if let Some(th) = clamp_th {
+                                init_val.abs() >= th - 1e-4
+                            } else {
+                                false
+                            };
+                            let label_color = if is_init_clamped {
+                                Color32::from_rgb(255, 90, 90)
+                            } else {
+                                Color32::from_rgb(140, 150, 170)
+                            };
+
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new(format!("{var_name}[0] ="))
                                         .monospace()
                                         .size(10.5)
-                                        .color(Color32::from_rgb(140, 150, 170)),
+                                        .color(label_color),
                                 );
-                                let mut init_val = doc
-                                    .state
-                                    .initial_conditions
-                                    .get(var_name)
-                                    .copied()
-                                    .unwrap_or(0.0);
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut init_val)
-                                            .speed(0.05)
-                                            .max_decimals(3),
-                                    )
-                                    .changed()
-                                {
+
+                                let mut drag = egui::DragValue::new(&mut init_val)
+                                    .speed(0.01)
+                                    .custom_formatter(|n, _| format_compact_value(n));
+
+                                if let Some(th) = clamp_th {
+                                    drag = drag.range(-th..=th);
+                                }
+
+                                if ui.add(drag).changed() {
+                                    if let Some(th) = clamp_th {
+                                        init_val = init_val.clamp(-th, th);
+                                    }
                                     init_cond_changes.push((var_name.clone(), init_val));
+                                }
+
+                                if is_init_clamped {
+                                    ui.label(
+                                        egui::RichText::new("[RAIL]")
+                                            .size(9.0)
+                                            .monospace()
+                                            .strong()
+                                            .color(Color32::from_rgb(255, 90, 90)),
+                                    )
+                                    .on_hover_text(
+                                        "Initial condition is at or outside the clamping rail.",
+                                    );
                                 }
                             });
                         }
