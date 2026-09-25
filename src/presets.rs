@@ -1,4 +1,4 @@
-use crate::document::{DocumentState, EquationDoc, ParameterDoc};
+use crate::document::{ClampingMode, DocumentState, EquationDoc, ParameterDoc};
 use crate::measure::{MeasurementSpec, MeasurementType};
 use crate::sweep::SweepConfig;
 use std::collections::HashMap;
@@ -150,6 +150,7 @@ fn van_der_pol_preset() -> DocumentState {
             max_val: 3.5,
             steps: 120,
         },
+        clamping_mode: ClampingMode::None,
     }
 }
 
@@ -185,6 +186,7 @@ fn logistic_map_preset() -> DocumentState {
             max_val: 4.0,
             steps: 200,
         },
+        clamping_mode: ClampingMode::None,
     }
 }
 
@@ -237,6 +239,7 @@ fn henon_map_preset() -> DocumentState {
             max_val: 1.5,
             steps: 140,
         },
+        clamping_mode: ClampingMode::None,
     }
 }
 
@@ -312,6 +315,7 @@ fn lotka_volterra_preset() -> DocumentState {
             max_val: 2.0,
             steps: 100,
         },
+        clamping_mode: ClampingMode::None,
     }
 }
 
@@ -410,6 +414,7 @@ fn pid_controller_preset() -> DocumentState {
             max_val: 4.0,
             steps: 120,
         },
+        clamping_mode: ClampingMode::None,
     }
 }
 

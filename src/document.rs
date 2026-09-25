@@ -20,6 +20,38 @@ pub struct ParameterDoc {
     pub step: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ClampingMode {
+    None,
+    Unit,        // [-1.0, 1.0] (Audio / Normalized)
+    Custom(f64), // [-C, +C]
+}
+
+impl ClampingMode {
+    pub fn threshold(&self) -> Option<f64> {
+        match self {
+            Self::None => None,
+            Self::Unit => Some(1.0),
+            Self::Custom(c) => Some(c.abs().max(1e-4)),
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.threshold().is_some()
+    }
+
+    pub fn clamp_val(&self, val: f64) -> f64 {
+        match self.threshold() {
+            Some(th) => val.clamp(-th, th),
+            None => val,
+        }
+    }
+}
+
+pub fn default_clamping_mode() -> ClampingMode {
+    ClampingMode::None
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentState {
     pub equations: Vec<EquationDoc>,
@@ -29,6 +61,8 @@ pub struct DocumentState {
     pub selection: Option<(usize, usize)>,
     pub search_query: String,
     pub sweep_config: SweepConfig,
+    #[serde(default = "default_clamping_mode")]
+    pub clamping_mode: ClampingMode,
 }
 
 impl Default for DocumentState {
@@ -84,6 +118,7 @@ impl DocumentState {
             selection: Some((50, 150)),
             search_query: "a[n+1] > a[n]".to_string(),
             sweep_config: SweepConfig::default(),
+            clamping_mode: ClampingMode::None,
         }
     }
 
@@ -122,6 +157,10 @@ impl DocumentState {
         } else {
             false
         }
+    }
+
+    pub fn set_initial_condition(&mut self, var: &str, val: f64) {
+        self.initial_conditions.insert(var.to_string(), val);
     }
 }
 

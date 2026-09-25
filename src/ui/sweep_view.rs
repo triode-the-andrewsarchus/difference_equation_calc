@@ -154,8 +154,19 @@ pub fn render_sweep_panel(
         };
         match *sweep_mode {
             SweepMode::Measurement => {
-                let m_min = sweep_result.min_measure.clamp(-1.0, 1.0);
-                let m_max = sweep_result.max_measure.clamp(-1.0, 1.0);
+                let raw_m_min = if sweep_result.min_measure.is_finite() {
+                    sweep_result.min_measure
+                } else {
+                    -1.0
+                };
+                let raw_m_max = if sweep_result.max_measure.is_finite() {
+                    sweep_result.max_measure
+                } else {
+                    1.0
+                };
+                let span = (raw_m_max - raw_m_min).max(1e-4);
+                let m_min = raw_m_min - span * 0.05;
+                let m_max = raw_m_max + span * 0.05;
 
                 let to_screen_y = |mval: f64| -> f32 {
                     let clamped = mval.clamp(m_min, m_max);
@@ -268,8 +279,19 @@ pub fn render_sweep_panel(
             }
             SweepMode::AttractorBifurcation => {
                 if let Some(attractor) = attractor_sweep {
-                    let s_min = attractor.state_min.clamp(-1.0, 1.0);
-                    let s_max = attractor.state_max.clamp(-1.0, 1.0);
+                    let raw_s_min = if attractor.state_min.is_finite() {
+                        attractor.state_min
+                    } else {
+                        -1.0
+                    };
+                    let raw_s_max = if attractor.state_max.is_finite() {
+                        attractor.state_max
+                    } else {
+                        1.0
+                    };
+                    let span = (raw_s_max - raw_s_min).max(1e-4);
+                    let s_min = raw_s_min - span * 0.05;
+                    let s_max = raw_s_max + span * 0.05;
 
                     let to_screen_y = |sval: f64| -> f32 {
                         let clamped = sval.clamp(s_min, s_max);

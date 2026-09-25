@@ -753,3 +753,218 @@ fn test_cascade_svf_document_simulation() {
         assert!(v.is_finite());
     }
 }
+
+// 22. Phase portrait direction fields and nullclines (Feature 1)
+#[test]
+fn test_compute_phase_field() {
+    use difference_equation_calc::document::{Document, DocumentState};
+    use difference_equation_calc::sim::compute_phase_field;
+
+    let doc = Document::new(DocumentState::victor_oscillator_demo());
+    let (eqs, errors) = doc.state.get_parsed_equations();
+    assert!(errors.is_empty());
+    let params = doc.state.get_parameters_map();
+
+    let field = compute_phase_field(
+        &eqs,
+        "a",
+        "b",
+        &doc.state.initial_conditions,
+        &params,
+        -1.0,
+        1.0,
+        -1.0,
+        1.0,
+        10,
+        10,
+    );
+
+    assert_eq!(field.vectors.len(), 100);
+    for pt in &field.vectors {
+        assert!(pt.x >= -1.0 && pt.x <= 1.0);
+        assert!(pt.y >= -1.0 && pt.y <= 1.0);
+        assert!(pt.magnitude >= 0.0);
+        assert!(pt.norm_dx.is_finite());
+        assert!(pt.norm_dy.is_finite());
+    }
+
+    assert!(
+        !field.x_nullclines.is_empty(),
+        "Expected non-empty x-nullclines for Victor oscillator"
+    );
+    assert!(
+        !field.y_nullclines.is_empty(),
+        "Expected non-empty y-nullclines for Victor oscillator"
+    );
+}
+
+// 23. Direct manipulation of Initial Conditions (Feature 4)
+#[test]
+fn test_direct_manipulation_initial_conditions() {
+    use difference_equation_calc::document::{Document, DocumentState};
+    use difference_equation_calc::sim::run_simulation;
+
+    let mut doc = Document::new(DocumentState::victor_oscillator_demo());
+    doc.state.set_initial_condition("a", 0.75);
+    doc.state.set_initial_condition("b", -0.42);
+
+    assert_eq!(doc.state.initial_conditions.get("a"), Some(&0.75));
+    assert_eq!(doc.state.initial_conditions.get("b"), Some(&-0.42));
+
+    let (eqs, _) = doc.state.get_parsed_equations();
+    let params = doc.state.get_parameters_map();
+    let sim = run_simulation(&eqs, &doc.state.initial_conditions, &params, 50).unwrap();
+
+    let a_vals = &sim.series.get("a").unwrap().values;
+    let b_vals = &sim.series.get("b").unwrap().values;
+    assert_eq!(a_vals[0], 0.75);
+    assert_eq!(b_vals[0], -0.42);
+}
+
+// 24. Parameter Family / Ensemble ribbon bundle (Feature 5)
+#[test]
+fn test_compute_parameter_family() {
+    use difference_equation_calc::document::{Document, DocumentState};
+    use difference_equation_calc::sweep::compute_parameter_family;
+
+    let doc = Document::new(DocumentState::victor_oscillator_demo());
+    let (eqs, _) = doc.state.get_parsed_equations();
+    let params = doc.state.get_parameters_map();
+
+    let family = compute_parameter_family(
+        &eqs,
+        &doc.state.initial_conditions,
+        &params,
+        "k",
+        0.05,
+        0.25,
+        6,
+        80,
+    );
+
+    assert_eq!(family.param_name, "k");
+    assert_eq!(family.members.len(), 6);
+    for m in &family.members {
+        assert!(m.param_value >= 0.05 && m.param_value <= 0.25);
+        assert!(m.series.contains_key("a"));
+        assert!(m.series.contains_key("b"));
+        let a_trace = m.series.get("a").unwrap();
+        assert_eq!(a_trace.len(), 80);
+        for v in a_trace {
+            assert!(v.is_finite());
+        }
+    }
+}
+
+// 25. Goal-Seeking / Inverse Parameter Manipulation (Feature 6)
+#[test]
+fn test_goal_seek_parameter() {
+    use difference_equation_calc::document::{Document, DocumentState};
+    use difference_equation_calc::sim::{goal_seek_parameter, run_simulation};
+
+    let doc = Document::new(DocumentState::victor_oscillator_demo());
+    let (eqs, _) = doc.state.get_parsed_equations();
+    let params = doc.state.get_parameters_map();
+
+    // Target: We want a[8] to be close to 0.40 by varying parameter k in [0.01, 0.4]
+    let target_step = 8;
+    let target_val = 0.40;
+
+    let solved_k = goal_seek_parameter(
+        &eqs,
+        &doc.state.initial_conditions,
+        &params,
+        "k",
+        0.01,
+        0.4,
+        "a",
+        target_step,
+        target_val,
+        15,
+    );
+
+    assert!(solved_k.is_some(), "Goal seek failed to find k");
+    let k_val = solved_k.unwrap();
+    assert!((0.01..=0.4).contains(&k_val));
+
+    let mut test_params = params.clone();
+    test_params.insert("k".to_string(), k_val);
+    let sim = run_simulation(&eqs, &doc.state.initial_conditions, &test_params, 20).unwrap();
+    let actual_val = sim.get_value("a", target_step).unwrap();
+    assert!(
+        (actual_val - target_val).abs() < 0.05,
+        "Goal seek error too large: expected {}, got {}",
+        target_val,
+        actual_val
+    );
+}
+
+// 26. Clamping Mode & Parameter Hazard Zone Analysis
+#[test]
+fn test_clamping_mode_and_hazard_zones() {
+    use difference_equation_calc::document::{ClampingMode, Document, DocumentState};
+    use difference_equation_calc::sim::analyze_parameter_clamping_zones;
+
+    let none_mode = ClampingMode::None;
+    assert_eq!(none_mode.threshold(), None);
+    assert!(!none_mode.is_enabled());
+    assert_eq!(none_mode.clamp_val(2.5), 2.5);
+
+    let unit_mode = ClampingMode::Unit;
+    assert_eq!(unit_mode.threshold(), Some(1.0));
+    assert!(unit_mode.is_enabled());
+    assert_eq!(unit_mode.clamp_val(2.5), 1.0);
+    assert_eq!(unit_mode.clamp_val(-2.5), -1.0);
+    assert_eq!(unit_mode.clamp_val(0.4), 0.4);
+
+    let custom_mode = ClampingMode::Custom(3.0);
+    assert_eq!(custom_mode.threshold(), Some(3.0));
+    assert!(custom_mode.is_enabled());
+    assert_eq!(custom_mode.clamp_val(4.5), 3.0);
+    assert_eq!(custom_mode.clamp_val(-5.0), -3.0);
+    assert_eq!(custom_mode.clamp_val(2.1), 2.1);
+
+    // Hazard zone analysis on Victor oscillator
+    let doc = Document::new(DocumentState::victor_oscillator_demo());
+    let (eqs, _) = doc.state.get_parsed_equations();
+    let params = doc.state.get_parameters_map();
+
+    // At threshold 0.5, the oscillator peak (initial condition is a=0.8) easily exceeds 0.5
+    let zones = analyze_parameter_clamping_zones(
+        &eqs,
+        &doc.state.initial_conditions,
+        &params,
+        "k",
+        0.01,
+        0.3,
+        0.5,
+        16,
+        40,
+    );
+
+    assert!(
+        !zones.is_empty(),
+        "Should detect clamping zones when threshold is 0.5"
+    );
+    for z in &zones {
+        assert!(z.start_norm <= z.end_norm);
+        assert!(z.max_peak >= 0.5);
+    }
+
+    // At huge threshold 100.0, no zones should be clamped
+    let safe_zones = analyze_parameter_clamping_zones(
+        &eqs,
+        &doc.state.initial_conditions,
+        &params,
+        "k",
+        0.01,
+        0.3,
+        100.0,
+        16,
+        40,
+    );
+    assert!(
+        safe_zones.is_empty(),
+        "No zones should exceed 100.0 threshold"
+    );
+}

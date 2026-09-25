@@ -627,6 +627,7 @@ pub fn create_cascade_biquad_doc(
             max_val: -0.2,
             steps: 120,
         },
+        clamping_mode: crate::document::ClampingMode::Unit,
     }
 }
 
@@ -839,6 +840,7 @@ pub fn create_cascade_svf_doc(
             max_val: 0.6,
             steps: 120,
         },
+        clamping_mode: crate::document::ClampingMode::Unit,
     }
 }
 

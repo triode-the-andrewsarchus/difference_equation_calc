@@ -198,3 +198,58 @@ pub fn execute_attractor_sweep(
         state_max,
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct ParameterFamilyMember {
+    pub param_value: f64,
+    pub series: HashMap<String, Vec<f64>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParameterFamilyResult {
+    pub param_name: String,
+    pub members: Vec<ParameterFamilyMember>,
+}
+
+/// Computes an ensemble / family of simulation runs across `count` evenly spaced parameter values.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_parameter_family(
+    equations: &[Equation],
+    initial_conditions: &HashMap<String, f64>,
+    base_parameters: &HashMap<String, f64>,
+    param_name: &str,
+    min_val: f64,
+    max_val: f64,
+    count: usize,
+    sample_count: usize,
+) -> ParameterFamilyResult {
+    let count = count.clamp(2, 12);
+    let mut members = Vec::with_capacity(count);
+    let mut params = base_parameters.clone();
+
+    for i in 0..count {
+        let t = if count > 1 {
+            i as f64 / (count - 1) as f64
+        } else {
+            0.5
+        };
+        let p_val = min_val + t * (max_val - min_val);
+        params.insert(param_name.to_string(), p_val);
+
+        if let Ok(sim) = run_simulation(equations, initial_conditions, &params, sample_count) {
+            let mut s_map = HashMap::new();
+            for (k, v) in sim.series {
+                s_map.insert(k, v.values);
+            }
+            members.push(ParameterFamilyMember {
+                param_value: p_val,
+                series: s_map,
+            });
+        }
+    }
+
+    ParameterFamilyResult {
+        param_name: param_name.to_string(),
+        members,
+    }
+}

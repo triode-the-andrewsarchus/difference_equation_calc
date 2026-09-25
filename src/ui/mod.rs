@@ -9,7 +9,7 @@ pub mod sweep_view;
 pub mod waveforms;
 
 use crate::deps::analyze_dependencies;
-use crate::document::{Document, DocumentState};
+use crate::document::{ClampingMode, Document, DocumentState};
 use crate::parser::parse_expression_str;
 use crate::presets::ALL_PRESETS;
 use crate::query::{execute_search, SearchResult};
@@ -44,6 +44,8 @@ pub struct DifferenceEquationApp {
     pub search_result: SearchResult,
     pub sweep_result: SweepResult,
     pub filter_designer_state: FilterDesignerState,
+    pub show_ensemble: bool,
+    pub ensemble_result: Option<crate::sweep::ParameterFamilyResult>,
     pub status_message: Option<(String, f32)>, // message, display timer
     pub cached_state: DocumentState,
     cached_sweep_mode: SweepMode,
@@ -61,6 +63,8 @@ impl DifferenceEquationApp {
                 x_max: 600.0,
                 is_dragging_selection: false,
                 drag_start_n: None,
+                is_dragging_init_cond: None,
+                is_goal_seeking: false,
             },
             sim_result: SimulationResult {
                 series: HashMap::new(),
@@ -74,6 +78,9 @@ impl DifferenceEquationApp {
                 var_x: "a".to_string(),
                 var_y: "b".to_string(),
                 show_ghost: true,
+                show_vector_field: true,
+                show_nullclines: true,
+                is_dragging_initial_pos: false,
             },
             sweep_mode: SweepMode::Measurement,
             bifurcation_var: "a".to_string(),
@@ -86,6 +93,8 @@ impl DifferenceEquationApp {
                 max_measure: 1.0,
             },
             filter_designer_state: FilterDesignerState::default(),
+            show_ensemble: false,
+            ensemble_result: None,
             status_message: None,
             cached_sweep_mode: SweepMode::Measurement,
             cached_bifurcation_var: "a".to_string(),
@@ -157,6 +166,25 @@ impl DifferenceEquationApp {
                     &params,
                 ));
             }
+        }
+
+        // 4. Compute parameter ensemble family overlay (if active)
+        if self.show_ensemble {
+            let p_name = self.doc.state.sweep_config.parameter_name.clone();
+            let min_val = self.doc.state.sweep_config.min_val;
+            let max_val = self.doc.state.sweep_config.max_val;
+            self.ensemble_result = Some(crate::sweep::compute_parameter_family(
+                &eqs,
+                &self.doc.state.initial_conditions,
+                &params,
+                &p_name,
+                min_val,
+                max_val,
+                7,
+                self.doc.state.sample_count,
+            ));
+        } else {
+            self.ensemble_result = None;
         }
 
         self.cached_state = self.doc.state.clone();
@@ -296,6 +324,34 @@ impl eframe::App for DifferenceEquationApp {
 
                 ui.separator();
 
+                // Parameter Ensemble Ribbon Overlay Toggle
+                let ens_label = if self.show_ensemble {
+                    "Ensemble ON"
+                } else {
+                    "Ensemble"
+                };
+                let ens_color = if self.show_ensemble {
+                    Color32::from_rgb(0, 220, 255)
+                } else {
+                    Color32::from_rgb(200, 210, 230)
+                };
+                let ens_btn = egui::Button::image_and_text(
+                    Icon::Waves.image_tinted(13.0, ens_color),
+                    ens_label,
+                );
+                if ui
+                    .add(ens_btn)
+                    .on_hover_text(
+                        "Toggle Parameter Family Overlay (small multiples ribbon bundle)",
+                    )
+                    .clicked()
+                {
+                    self.show_ensemble = !self.show_ensemble;
+                    self.recompute_all();
+                }
+
+                ui.separator();
+
                 // Filter Designer Modal Button
                 let filter_active = self.filter_designer_state.is_open;
                 let filter_tint = if filter_active {
@@ -315,6 +371,86 @@ impl eframe::App for DifferenceEquationApp {
                     .clicked()
                 {
                     self.filter_designer_state.is_open = !self.filter_designer_state.is_open;
+                }
+
+                ui.separator();
+
+                // Clamping Mode Selector
+                ui.label("Clamp:");
+                let current_mode = self.doc.state.clamping_mode;
+                let clamp_label = match current_mode {
+                    ClampingMode::None => "Off (Natural)".to_string(),
+                    ClampingMode::Unit => "±1.0 (Unit)".to_string(),
+                    ClampingMode::Custom(c) => format!("±{:.1} (Custom)", c),
+                };
+
+                let any_clamped = if let Some(th) = self.doc.state.clamping_mode.threshold() {
+                    self.sim_result
+                        .series
+                        .values()
+                        .any(|s| s.values.iter().any(|&v| v.abs() >= th - 1e-4))
+                } else {
+                    false
+                };
+
+                egui::ComboBox::from_id_salt("clamping_mode_select")
+                    .selected_text(clamp_label)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                matches!(current_mode, ClampingMode::None),
+                                "Off (Natural dynamics)",
+                            )
+                            .clicked()
+                        {
+                            self.doc.state.clamping_mode = ClampingMode::None;
+                            self.recompute_all();
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(current_mode, ClampingMode::Unit),
+                                "±1.0 (Audio / Normalized)",
+                            )
+                            .clicked()
+                        {
+                            self.doc.state.clamping_mode = ClampingMode::Unit;
+                            self.recompute_all();
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(current_mode, ClampingMode::Custom(_)),
+                                "Custom limit...",
+                            )
+                            .clicked()
+                        {
+                            self.doc.state.clamping_mode = ClampingMode::Custom(2.0);
+                            self.recompute_all();
+                        }
+                    });
+
+                if let ClampingMode::Custom(ref mut c) = self.doc.state.clamping_mode {
+                    if ui
+                        .add(
+                            egui::DragValue::new(c)
+                                .speed(0.1)
+                                .range(0.1..=100.0)
+                                .prefix("±"),
+                        )
+                        .changed()
+                    {
+                        self.recompute_all();
+                    }
+                }
+
+                if any_clamped {
+                    ui.label(
+                        egui::RichText::new("[CLIPPING]")
+                            .size(10.0)
+                            .monospace()
+                            .strong()
+                            .color(Color32::from_rgb(255, 80, 80)),
+                    )
+                    .on_hover_text("Simulation values exceed current clamping rails.");
                 }
 
                 ui.separator();
@@ -424,13 +560,16 @@ impl eframe::App for DifferenceEquationApp {
                     ui.add_space(4.0);
 
                     // Row 1: Parameters + Measurements + Phase Space
+                    let (parsed_eqs, _) = self.doc.state.get_parsed_equations();
+                    let params = self.doc.state.get_parameters_map();
+
                     ui.horizontal_top(|ui| {
                         // Parameters column
                         ui.allocate_ui_with_layout(
                             vec2(260.0, 130.0),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                render_parameters_panel(ui, &mut self.doc);
+                                render_parameters_panel(ui, &mut self.doc, &parsed_eqs);
                             },
                         );
 
@@ -458,16 +597,23 @@ impl eframe::App for DifferenceEquationApp {
                             vec2(phase_w, 130.0),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                let phase_click = render_phase_panel(
+                                let phase_resp = render_phase_panel(
                                     ui,
                                     &self.sim_result,
                                     self.ghost_sim.as_ref(),
                                     self.cursor_step,
                                     self.doc.state.selection,
+                                    &parsed_eqs,
+                                    &self.doc.state.initial_conditions,
+                                    &params,
+                                    self.doc.state.clamping_mode.threshold(),
                                     &mut self.phase_state,
                                 );
-                                if let Some(step) = phase_click {
+                                if let Some(step) = phase_resp.clicked_step {
                                     self.cursor_step = Some(step);
+                                }
+                                for (var, val) in phase_resp.new_initial_conditions {
+                                    self.doc.state.set_initial_condition(&var, val);
                                 }
                             },
                         );
@@ -531,11 +677,43 @@ impl eframe::App for DifferenceEquationApp {
                     .and_then(|g| g.series.get(&target_name))
                     .map(|s| &s.values[..]);
 
+                let family_traces: Vec<&[f64]> = if self.show_ensemble {
+                    if let Some(ref ens) = self.ensemble_result {
+                        ens.members
+                            .iter()
+                            .filter_map(|m| m.series.get(&target_name).map(|v| &v[..]))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+
+                let clamp_threshold = self.doc.state.clamping_mode.threshold();
+                let mut is_clamped = false;
+                let mut max_peak = 0.0_f64;
+                for &v in values {
+                    let abs_v = v.abs();
+                    if abs_v > max_peak {
+                        max_peak = abs_v;
+                    }
+                    if let Some(th) = clamp_threshold {
+                        if abs_v >= th - 1e-4 {
+                            is_clamped = true;
+                        }
+                    }
+                }
+
                 waveform_rows.push(WaveformRowInfo {
                     name: Box::leak(target_name.into_boxed_str()),
                     color,
                     values,
                     ghost_values,
+                    family_traces,
+                    clamp_threshold,
+                    is_clamped,
+                    max_peak,
                 });
             }
 
@@ -584,6 +762,46 @@ impl eframe::App for DifferenceEquationApp {
 
                             if let Some(new_sel) = wf_resp.new_selection {
                                 self.doc.state.selection = new_sel;
+                            }
+
+                            if let Some((var, val)) = wf_resp.new_initial_condition {
+                                self.doc.state.set_initial_condition(&var, val);
+                            }
+
+                            if let Some(gs) = wf_resp.goal_seek {
+                                let param_opt = self
+                                    .doc
+                                    .state
+                                    .parameters
+                                    .iter()
+                                    .find(|p| p.name == self.doc.state.sweep_config.parameter_name)
+                                    .cloned()
+                                    .or_else(|| self.doc.state.parameters.first().cloned());
+
+                                if let Some(param) = param_opt {
+                                    let params_map = self.doc.state.get_parameters_map();
+                                    if let Some(val) = crate::sim::goal_seek_parameter(
+                                        &parsed_eqs,
+                                        &self.doc.state.initial_conditions,
+                                        &params_map,
+                                        &param.name,
+                                        param.min,
+                                        param.max,
+                                        &gs.target_var,
+                                        gs.target_step,
+                                        gs.target_value,
+                                        16,
+                                    ) {
+                                        self.doc.state.set_parameter_value(&param.name, val);
+                                        self.status_message = Some((
+                                            format!(
+                                                "Goal-seek: solved {} = {:.4}",
+                                                param.name, val
+                                            ),
+                                            2.5,
+                                        ));
+                                    }
+                                }
                             }
                         },
                     );
