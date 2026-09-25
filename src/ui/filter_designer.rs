@@ -50,6 +50,7 @@ impl Default for FilterDesignerState {
 
 pub struct FilterDesignerResponse {
     pub applied: bool,
+    pub export_code_requested: bool,
 }
 
 pub fn render_filter_designer_window(
@@ -57,7 +58,10 @@ pub fn render_filter_designer_window(
     state: &mut FilterDesignerState,
     doc: &mut Document,
 ) -> FilterDesignerResponse {
-    let mut response = FilterDesignerResponse { applied: false };
+    let mut response = FilterDesignerResponse {
+        applied: false,
+        export_code_requested: false,
+    };
     if !state.is_open {
         return response;
     }
@@ -416,6 +420,19 @@ pub fn render_filter_designer_window(
                     .clicked()
                 {
                     should_apply = true;
+                }
+
+                let export_btn = egui::Button::image_and_text(
+                    Icon::Save.image_tinted(14.0, Color32::from_rgb(200, 230, 255)),
+                    "Export Code",
+                );
+                if ui
+                    .add(export_btn)
+                    .on_hover_text("Export filter equations directly to C, Rust, or Python")
+                    .clicked()
+                {
+                    should_apply = true;
+                    response.export_code_requested = true;
                 }
 
                 if ui.button("Reset Defaults").clicked() {

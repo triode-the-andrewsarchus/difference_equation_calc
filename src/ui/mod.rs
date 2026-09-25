@@ -1,3 +1,4 @@
+pub mod codegen_modal;
 pub mod equation_view;
 pub mod filter_designer;
 pub mod format;
@@ -21,6 +22,7 @@ use crate::sweep::{
     execute_attractor_sweep, execute_parameter_sweep, AttractorSweepConfig, AttractorSweepResult,
     SweepMode, SweepResult,
 };
+use crate::ui::codegen_modal::{render_codegen_modal, CodegenModalState};
 use crate::ui::equation_view::render_equation_list;
 use crate::ui::filter_designer::{render_filter_designer_window, FilterDesignerState};
 use crate::ui::icons::Icon;
@@ -47,6 +49,7 @@ pub struct DifferenceEquationApp {
     pub search_result: SearchResult,
     pub sweep_result: SweepResult,
     pub filter_designer_state: FilterDesignerState,
+    pub codegen_modal_state: CodegenModalState,
     pub show_ensemble: bool,
     pub ensemble_result: Option<crate::sweep::ParameterFamilyResult>,
     pub status_message: Option<(String, f32)>, // message, display timer
@@ -96,6 +99,7 @@ impl DifferenceEquationApp {
                 max_measure: 1.0,
             },
             filter_designer_state: FilterDesignerState::default(),
+            codegen_modal_state: CodegenModalState::default(),
             show_ensemble: false,
             ensemble_result: None,
             status_message: None,
@@ -374,6 +378,25 @@ impl eframe::App for DifferenceEquationApp {
                     .clicked()
                 {
                     self.filter_designer_state.is_open = !self.filter_designer_state.is_open;
+                }
+
+                // Export Code Modal Button
+                let codegen_active = self.codegen_modal_state.is_open;
+                let codegen_tint = if codegen_active {
+                    Color32::from_rgb(80, 240, 160)
+                } else {
+                    Color32::from_rgb(200, 210, 230)
+                };
+                let export_btn = egui::Button::image_and_text(
+                    Icon::Save.image_tinted(13.0, codegen_tint),
+                    "Export Code",
+                );
+                if ui
+                    .add(export_btn)
+                    .on_hover_text("Export difference equation system to C, Rust, or Python")
+                    .clicked()
+                {
+                    self.codegen_modal_state.is_open = !self.codegen_modal_state.is_open;
                 }
 
                 ui.separator();
@@ -832,6 +855,12 @@ impl eframe::App for DifferenceEquationApp {
                 }
             }
         }
+        if filter_resp.export_code_requested {
+            self.codegen_modal_state.is_open = true;
+        }
+
+        // Render Export Code Modal Window (if open)
+        render_codegen_modal(ctx, &mut self.codegen_modal_state, &self.doc.state);
 
         // Check if document state or sweep mode changed to trigger live recomputation
         if self.doc.state != self.cached_state
