@@ -19,11 +19,12 @@ use crate::presets::ALL_PRESETS;
 use crate::query::{execute_search, SearchResult};
 use crate::sim::{run_simulation, SimulationResult};
 use crate::sweep::{
-    execute_attractor_sweep, execute_parameter_sweep, AttractorSweepConfig, AttractorSweepResult,
-    SweepMode, SweepResult,
+    execute_attractor_sweep, execute_parameter_sweep, execute_parameter_sweep_2d,
+    AttractorSweepConfig, AttractorSweepResult, Sweep2DConfig, Sweep2DResult, SweepMode,
+    SweepResult,
 };
 use crate::ui::codegen_modal::{render_codegen_modal, CodegenModalState};
-use crate::ui::equation_view::render_equation_list;
+use crate::ui::equation_view::{extract_target_var, render_equation_list};
 use crate::ui::filter_designer::{render_filter_designer_window, FilterDesignerState};
 use crate::ui::icons::Icon;
 use crate::ui::measure_view::render_measurements_panel;
@@ -45,7 +46,9 @@ pub struct DifferenceEquationApp {
     pub phase_state: PhaseViewState,
     pub sweep_mode: SweepMode,
     pub bifurcation_var: String,
+    pub sweep_param_y: String,
     pub attractor_sweep_result: Option<AttractorSweepResult>,
+    pub sweep_2d_result: Option<Sweep2DResult>,
     pub search_result: SearchResult,
     pub sweep_result: SweepResult,
     pub filter_designer_state: FilterDesignerState,
@@ -56,6 +59,8 @@ pub struct DifferenceEquationApp {
     pub cached_state: DocumentState,
     cached_sweep_mode: SweepMode,
     cached_bifurcation_var: String,
+    cached_sweep_param_y: String,
+    pending_checkpoint: bool,
 }
 
 impl DifferenceEquationApp {
@@ -64,14 +69,7 @@ impl DifferenceEquationApp {
         let mut app = Self {
             cached_state: doc.state.clone(),
             doc,
-            viewport: WaveformViewport {
-                x_min: 0.0,
-                x_max: 600.0,
-                is_dragging_selection: false,
-                drag_start_n: None,
-                is_dragging_init_cond: None,
-                is_goal_seeking: false,
-            },
+            viewport: WaveformViewport::default(),
             sim_result: SimulationResult {
                 series: HashMap::new(),
                 sample_count: 600,
@@ -80,17 +78,12 @@ impl DifferenceEquationApp {
             ghost_sim: None,
             is_ghost_pinned: false,
             cursor_step: None,
-            phase_state: PhaseViewState {
-                var_x: "a".to_string(),
-                var_y: "b".to_string(),
-                show_ghost: true,
-                show_vector_field: true,
-                show_nullclines: true,
-                is_dragging_initial_pos: false,
-            },
+            phase_state: PhaseViewState::default(),
             sweep_mode: SweepMode::Measurement,
             bifurcation_var: "a".to_string(),
+            sweep_param_y: "k".to_string(),
             attractor_sweep_result: None,
+            sweep_2d_result: None,
             search_result: SearchResult::default(),
             sweep_result: SweepResult {
                 config: Default::default(),
@@ -105,6 +98,8 @@ impl DifferenceEquationApp {
             status_message: None,
             cached_sweep_mode: SweepMode::Measurement,
             cached_bifurcation_var: "a".to_string(),
+            cached_sweep_param_y: "k".to_string(),
+            pending_checkpoint: false,
         };
 
         app.recompute_all();
@@ -173,6 +168,53 @@ impl DifferenceEquationApp {
                     &params,
                 ));
             }
+            SweepMode::Heatmap2D => {
+                let (s0, s1) = self
+                    .doc
+                    .state
+                    .selection
+                    .unwrap_or((0, self.doc.state.sample_count.saturating_sub(1)));
+                let py_doc = self
+                    .doc
+                    .state
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == self.sweep_param_y)
+                    .or_else(|| {
+                        self.doc
+                            .state
+                            .parameters
+                            .iter()
+                            .find(|p| p.name != self.doc.state.sweep_config.parameter_name)
+                    })
+                    .or_else(|| self.doc.state.parameters.first());
+
+                let (py_name, y_min, y_max) = py_doc
+                    .map(|p| (p.name.clone(), p.min, p.max))
+                    .unwrap_or_else(|| (self.sweep_param_y.clone(), 0.0, 1.0));
+                self.sweep_param_y = py_name.clone();
+
+                let config_2d = Sweep2DConfig {
+                    param_x_name: self.doc.state.sweep_config.parameter_name.clone(),
+                    x_min: self.doc.state.sweep_config.min_val,
+                    x_max: self.doc.state.sweep_config.max_val,
+                    param_y_name: py_name,
+                    y_min,
+                    y_max,
+                    cols: 28,
+                    rows: 16,
+                    measurement: self.doc.state.sweep_config.measurement.clone(),
+                };
+                self.sweep_2d_result = Some(execute_parameter_sweep_2d(
+                    &config_2d,
+                    &eqs,
+                    &self.doc.state.initial_conditions,
+                    &params,
+                    self.doc.state.sample_count,
+                    s0,
+                    s1,
+                ));
+            }
         }
 
         // 4. Compute parameter ensemble family overlay (if active)
@@ -197,6 +239,7 @@ impl DifferenceEquationApp {
         self.cached_state = self.doc.state.clone();
         self.cached_sweep_mode = self.sweep_mode;
         self.cached_bifurcation_var = self.bifurcation_var.clone();
+        self.cached_sweep_param_y = self.sweep_param_y.clone();
     }
 }
 
@@ -657,11 +700,16 @@ impl eframe::App for DifferenceEquationApp {
                         &mut self.doc,
                         &self.sweep_result,
                         self.attractor_sweep_result.as_ref(),
+                        self.sweep_2d_result.as_ref(),
                         &mut self.sweep_mode,
                         &mut self.bifurcation_var,
+                        &mut self.sweep_param_y,
                         &available_vars,
                     );
                     if let Some((pname, pval)) = sweep_resp.param_changed {
+                        self.doc.state.set_parameter_value(&pname, pval);
+                    }
+                    if let Some((pname, pval)) = sweep_resp.param_y_changed {
                         self.doc.state.set_parameter_value(&pname, pval);
                     }
 
@@ -678,14 +726,11 @@ impl eframe::App for DifferenceEquationApp {
             let mut waveform_rows = Vec::new();
             for eq_doc in &self.doc.state.equations {
                 let color = TRACE_COLORS[eq_doc.color_idx % TRACE_COLORS.len()];
-                // Extract target variable name
-                let target_name = parsed_eqs
-                    .iter()
-                    .find(|e| {
-                        e.target_var.starts_with(&eq_doc.source[..1])
-                            || eq_doc.source.starts_with(&e.target_var)
-                    })
-                    .map(|e| e.target_var.clone())
+                // Extract exact target variable name for this equation row
+                let target_name = crate::parser::parse_equation_str(eq_doc.source.trim())
+                    .map(|eq| eq.target_var)
+                    .ok()
+                    .or_else(|| extract_target_var(&eq_doc.source))
                     .unwrap_or_else(|| {
                         let name_part = eq_doc.source.split('[').next().unwrap_or("?").trim();
                         name_part.to_string()
@@ -732,7 +777,7 @@ impl eframe::App for DifferenceEquationApp {
                 }
 
                 waveform_rows.push(WaveformRowInfo {
-                    name: Box::leak(target_name.into_boxed_str()),
+                    name: target_name,
                     color,
                     values,
                     ghost_values,
@@ -870,14 +915,30 @@ impl eframe::App for DifferenceEquationApp {
         }
 
         // Render Export Code Modal Window (if open)
-        render_codegen_modal(ctx, &mut self.codegen_modal_state, &self.doc.state);
+        render_codegen_modal(
+            ctx,
+            &mut self.codegen_modal_state,
+            &self.doc.state,
+            &self.sim_result,
+        );
 
         // Check if document state or sweep mode changed to trigger live recomputation
-        if self.doc.state != self.cached_state
+        let state_changed = self.doc.state != self.cached_state;
+        if state_changed {
+            self.pending_checkpoint = true;
+        }
+        if state_changed
             || self.sweep_mode != self.cached_sweep_mode
             || self.bifurcation_var != self.cached_bifurcation_var
+            || self.sweep_param_y != self.cached_sweep_param_y
         {
             self.recompute_all();
+        }
+
+        // Commit undo/redo checkpoint once pointer drag is released
+        if self.pending_checkpoint && !ctx.input(|i| i.pointer.any_down()) {
+            self.doc.checkpoint();
+            self.pending_checkpoint = false;
         }
     }
 }
