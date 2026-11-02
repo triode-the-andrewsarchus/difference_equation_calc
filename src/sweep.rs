@@ -108,6 +108,93 @@ pub fn execute_parameter_sweep(
 pub enum SweepMode {
     Measurement,
     AttractorBifurcation,
+    Heatmap2D,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sweep2DConfig {
+    pub param_x_name: String,
+    pub x_min: f64,
+    pub x_max: f64,
+    pub param_y_name: String,
+    pub y_min: f64,
+    pub y_max: f64,
+    pub cols: usize,
+    pub rows: usize,
+    pub measurement: MeasurementSpec,
+}
+
+#[derive(Debug, Clone)]
+pub struct Sweep2DResult {
+    pub config: Sweep2DConfig,
+    /// Grid values indexed as `grid[row][col]` where `row` is Y and `col` is X
+    pub grid: Vec<Vec<Option<f64>>>,
+    pub min_measure: f64,
+    pub max_measure: f64,
+}
+
+pub fn execute_parameter_sweep_2d(
+    config: &Sweep2DConfig,
+    equations: &[Equation],
+    initial_conditions: &HashMap<String, f64>,
+    base_parameters: &HashMap<String, f64>,
+    sample_count: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> Sweep2DResult {
+    let cols = config.cols.clamp(4, 48);
+    let rows = config.rows.clamp(4, 36);
+    let mut grid = vec![vec![None; cols]; rows];
+    let mut min_measure = f64::INFINITY;
+    let mut max_measure = f64::NEG_INFINITY;
+
+    // Clone base parameters so original document is never mutated
+    let mut sweep_params = base_parameters.clone();
+    let sim_steps = (selection_end + 1).min(sample_count).max(2);
+
+    let dx = (config.x_max - config.x_min) / ((cols - 1) as f64);
+    let dy = (config.y_max - config.y_min) / ((rows - 1) as f64);
+
+    for (r, row_vec) in grid.iter_mut().enumerate().take(rows) {
+        let py = config.y_min + (r as f64) * dy;
+        for (c, cell) in row_vec.iter_mut().enumerate().take(cols) {
+            let px = config.x_min + (c as f64) * dx;
+            sweep_params.insert(config.param_x_name.clone(), px);
+            sweep_params.insert(config.param_y_name.clone(), py);
+
+            if let Ok(sim_result) =
+                run_simulation(equations, initial_conditions, &sweep_params, sim_steps)
+            {
+                if let Ok(m) = calculate_measurement(
+                    &config.measurement,
+                    &sim_result,
+                    selection_start,
+                    selection_end.min(sim_steps - 1),
+                ) {
+                    if m.is_finite() {
+                        min_measure = min_measure.min(m);
+                        max_measure = max_measure.max(m);
+                        *cell = Some(m);
+                    }
+                }
+            }
+        }
+    }
+
+    if !min_measure.is_finite() {
+        min_measure = 0.0;
+        max_measure = 1.0;
+    } else if (max_measure - min_measure).abs() < 1e-9 {
+        max_measure += 1.0;
+        min_measure -= 1.0;
+    }
+
+    Sweep2DResult {
+        config: config.clone(),
+        grid,
+        min_measure,
+        max_measure,
+    }
 }
 
 #[derive(Debug, Clone)]

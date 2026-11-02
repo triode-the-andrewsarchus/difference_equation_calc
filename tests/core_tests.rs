@@ -1226,3 +1226,189 @@ fn test_creative_nonlinear_options() {
         );
     }
 }
+
+#[test]
+fn test_extended_math_functions_and_constants() {
+    use difference_equation_calc::parser::parse_equation_str;
+    use difference_equation_calc::sim::run_simulation;
+
+    let eqs = vec![
+        parse_equation_str("a[n+1] = fract(a[n] + 0.25)").unwrap(),
+        parse_equation_str("b[n+1] = lerp(0.0, 10.0, step(3.0, n)) + sign(a[n] - 0.5)").unwrap(),
+        parse_equation_str(
+            "c[n+1] = atan2(sin(tau * 0.1), cos(tau * 0.1)) + hypot(3.0, 4.0) + log10(100.0) + log2(8.0)",
+        )
+        .unwrap(),
+        parse_equation_str("d[n+1] = asin(0.5) + acos(0.5)").unwrap(),
+    ];
+
+    let mut inits = HashMap::new();
+    inits.insert("a".to_string(), 0.1);
+    inits.insert("b".to_string(), 0.0);
+    inits.insert("c".to_string(), 0.0);
+    inits.insert("d".to_string(), 0.0);
+
+    let params = HashMap::new();
+    let sim = run_simulation(&eqs, &inits, &params, 20).expect("Simulation failed");
+    assert!(sim.failure.is_none(), "Sim failed: {:?}", sim.failure);
+
+    // Check fract wraps into [0, 1)
+    for step in 0..20 {
+        let a_val = sim.get_value("a", step).unwrap();
+        assert!((0.0..1.0).contains(&a_val));
+    }
+
+    // Check c[1] = 2*pi*0.1 + 5.0 + 2.0 + 3.0 = 10.0 + 0.2*pi
+    let c1 = sim.get_value("c", 1).unwrap();
+    let expected_c1 = std::f64::consts::TAU * 0.1 + 5.0 + 2.0 + 3.0;
+    assert!((c1 - expected_c1).abs() < 1e-9);
+
+    // Check asin(0.5) + acos(0.5) == pi / 2
+    let d1 = sim.get_value("d", 1).unwrap();
+    assert!((d1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+}
+
+#[test]
+fn test_dynamical_measurements_and_fft_spectrum() {
+    use difference_equation_calc::measure::{
+        calculate_measurement, compute_spectrum, MeasurementSpec, MeasurementType,
+    };
+    use difference_equation_calc::parser::parse_equation_str;
+    use difference_equation_calc::sim::run_simulation;
+
+    // Pure sine wave at frequency f = 0.05 cycles/step (period = 20 steps)
+    let eqs = vec![parse_equation_str("x[n+1] = sin(tau * 0.05 * (n + 1))").unwrap()];
+    let mut inits = HashMap::new();
+    inits.insert("x".to_string(), 0.0);
+    let params = HashMap::new();
+
+    let sim = run_simulation(&eqs, &inits, &params, 512).unwrap();
+    assert!(sim.failure.is_none());
+
+    let dom_freq = calculate_measurement(
+        &MeasurementSpec::new("x", MeasurementType::DomFreq),
+        &sim,
+        0,
+        511,
+    )
+    .unwrap();
+    assert!(
+        (dom_freq - 0.05).abs() < 0.002,
+        "Expected DomFreq ~0.05, got {dom_freq}"
+    );
+
+    let std_dev = calculate_measurement(
+        &MeasurementSpec::new("x", MeasurementType::StdDev),
+        &sim,
+        0,
+        511,
+    )
+    .unwrap();
+    assert!(
+        (std_dev - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.02,
+        "Expected sine StdDev ~0.7071, got {std_dev}"
+    );
+
+    let zc = calculate_measurement(
+        &MeasurementSpec::new("x", MeasurementType::ZeroCrossings),
+        &sim,
+        0,
+        200,
+    )
+    .unwrap();
+    assert!(
+        zc >= 19.0 && zc <= 21.0,
+        "Expected ~20 zero crossings, got {zc}"
+    );
+
+    // FFT Spectrum peak frequency check
+    let xs = &sim.series.get("x").unwrap().values;
+    let spec = compute_spectrum(xs);
+    assert!(
+        (spec.peak_freq - 0.05).abs() < 0.002,
+        "Expected FFT peak at 0.05, got {}",
+        spec.peak_freq
+    );
+    assert!(
+        (spec.peak_mag - 1.0).abs() < 0.05,
+        "Expected FFT peak magnitude ~1.0, got {}",
+        spec.peak_mag
+    );
+}
+
+#[test]
+fn test_2d_parameter_sweep_and_return_map_and_csv() {
+    use difference_equation_calc::document::{Document, DocumentState};
+    use difference_equation_calc::measure::{MeasurementSpec, MeasurementType};
+    use difference_equation_calc::presets::{get_preset_by_kind, PresetKind};
+    use difference_equation_calc::sim::{compute_return_map_curve, run_simulation};
+    use difference_equation_calc::sweep::{execute_parameter_sweep_2d, Sweep2DConfig};
+
+    let preset = get_preset_by_kind(PresetKind::VanDerPol);
+    let doc = Document::new((preset.state_builder)());
+    let orig_params = doc.state.get_parameters_map();
+    let (eqs, _) = doc.state.get_parsed_equations();
+
+    let cfg = Sweep2DConfig {
+        param_x_name: "mu".to_string(),
+        x_min: 0.2,
+        x_max: 2.0,
+        param_y_name: "dt".to_string(),
+        y_min: 0.02,
+        y_max: 0.08,
+        cols: 6,
+        rows: 5,
+        measurement: MeasurementSpec::new("x", MeasurementType::Rms),
+    };
+
+    let res_2d = execute_parameter_sweep_2d(
+        &cfg,
+        &eqs,
+        &doc.state.initial_conditions,
+        &orig_params,
+        200,
+        50,
+        199,
+    );
+
+    assert_eq!(res_2d.grid.len(), 5);
+    assert_eq!(res_2d.grid[0].len(), 6);
+    assert!(res_2d.max_measure >= res_2d.min_measure);
+    // Verify non-mutation of document parameters
+    assert_eq!(doc.state.get_parameters_map(), orig_params);
+
+    // Test 1D return map curve on Logistic map
+    let log_doc = (get_preset_by_kind(PresetKind::LogisticMap).state_builder)();
+    let (log_eqs, _) = log_doc.get_parsed_equations();
+    let log_params = log_doc.get_parameters_map();
+    let curve = compute_return_map_curve(
+        &log_eqs,
+        "x",
+        &log_doc.initial_conditions,
+        &log_params,
+        0.0,
+        1.0,
+        21,
+    );
+    assert_eq!(curve.len(), 21);
+    // At x = 0.5, x[n+1] = r * 0.5 * 0.5 = 0.25 * r
+    let mid = curve[10];
+    let r_val = log_params["r"];
+    assert!((mid.0 - 0.5).abs() < 1e-9);
+    assert!((mid.1 - 0.25 * r_val).abs() < 1e-9);
+
+    // Test CSV export
+    let osc = DocumentState::victor_oscillator_demo();
+    let (osc_eqs, _) = osc.get_parsed_equations();
+    let sim = run_simulation(
+        &osc_eqs,
+        &osc.initial_conditions,
+        &osc.get_parameters_map(),
+        10,
+    )
+    .unwrap();
+    let csv = sim.to_csv(&["a".to_string(), "b".to_string()]);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "n,a,b");
+    assert_eq!(lines.len(), 11);
+}

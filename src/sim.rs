@@ -30,6 +30,45 @@ impl SimulationResult {
             .and_then(|s| s.values.get(step))
             .copied()
     }
+
+    /// Exports the simulation history as a CSV table with `n` as the first column.
+    pub fn to_csv(&self, ordered_vars: &[String]) -> String {
+        let mut vars: Vec<String> = if ordered_vars.is_empty() {
+            let mut v: Vec<String> = self.series.keys().cloned().collect();
+            v.sort();
+            v
+        } else {
+            ordered_vars
+                .iter()
+                .filter(|k| self.series.contains_key(*k))
+                .cloned()
+                .collect()
+        };
+        if vars.is_empty() {
+            vars = self.series.keys().cloned().collect();
+            vars.sort();
+        }
+
+        let mut out = String::new();
+        out.push('n');
+        for v in &vars {
+            out.push(',');
+            out.push_str(v);
+        }
+        out.push('\n');
+
+        for step in 0..self.sample_count {
+            out.push_str(&step.to_string());
+            for v in &vars {
+                out.push(',');
+                if let Some(val) = self.get_value(v, step) {
+                    out.push_str(&format!("{val:.8}"));
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
 }
 
 pub struct SimulationContext<'a> {
@@ -75,6 +114,7 @@ impl<'a> EvalContext for SimulationContext<'a> {
         match name {
             "n" => Some(self.current_step as f64),
             "pi" | "PI" => Some(std::f64::consts::PI),
+            "tau" | "TAU" => Some(std::f64::consts::TAU),
             "e" | "E" => Some(std::f64::consts::E),
             _ => self.parameters.get(name).copied(),
         }
@@ -109,6 +149,7 @@ impl<'a> EvalContext for SimResultContext<'a> {
         match name {
             "n" => Some(self.current_step as f64),
             "pi" | "PI" => Some(std::f64::consts::PI),
+            "tau" | "TAU" => Some(std::f64::consts::TAU),
             "e" | "E" => Some(std::f64::consts::E),
             _ => self.parameters.get(name).copied(),
         }
@@ -435,6 +476,40 @@ pub fn compute_phase_field(
         x_nullclines,
         y_nullclines,
     }
+}
+
+/// Evaluates the 1-step recurrence map curve `x[n] -> x[n+1]` across `[x_min, x_max]`
+/// for plotting return maps and cobweb diagrams.
+pub fn compute_return_map_curve(
+    equations: &[Equation],
+    var_x: &str,
+    other_vars: &HashMap<String, f64>,
+    parameters: &HashMap<String, f64>,
+    x_min: f64,
+    x_max: f64,
+    samples: usize,
+) -> Vec<(f64, f64)> {
+    if equations.is_empty() || x_min >= x_max || samples < 2 {
+        return Vec::new();
+    }
+    let count = samples.clamp(8, 200);
+    let mut curve = Vec::with_capacity(count);
+    let mut test_inits = other_vars.clone();
+    let span = x_max - x_min;
+
+    for i in 0..count {
+        let t = (i as f64) / ((count - 1) as f64);
+        let x_val = x_min + t * span;
+        test_inits.insert(var_x.to_string(), x_val);
+        if let Ok(res) = run_simulation(equations, &test_inits, parameters, 2) {
+            if let Some(next_x) = res.get_value(var_x, 1) {
+                if next_x.is_finite() {
+                    curve.push((x_val, next_x));
+                }
+            }
+        }
+    }
+    curve
 }
 
 /// Solves for `param_name` in `[param_min, param_max]` such that
