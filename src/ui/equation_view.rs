@@ -34,6 +34,7 @@ pub fn render_equation_list(
     let mut scrub_action = None;
     let mut promote_action = None;
     let mut delete_eq_id = None;
+    let mut swap_eq_indices: Option<(usize, usize)> = None;
     let mut add_equation = false;
     let mut source_changes: Vec<(usize, String)> = Vec::new();
     let mut init_cond_changes: Vec<(String, f64)> = Vec::new();
@@ -48,6 +49,21 @@ pub fn render_equation_list(
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("Equations").size(15.0).strong());
+            ui.label(
+                egui::RichText::new("(ƒ(x) ?)")
+                    .size(11.0)
+                    .color(Color32::from_rgb(130, 160, 210)),
+            )
+            .on_hover_text(
+                "Recurrence Syntax:\n\
+                 • Target: var[n+1] = expression\n\
+                 • Past / Same-step state: var[n], var[n-1], other[n+1]\n\
+                 • Constants: n (timestep), pi, tau, e\n\
+                 • Trig / Hyperbolic: sin, cos, tan, asin, acos, atan, atan2(y,x), sinh, cosh, tanh\n\
+                 • Math: abs, sqrt, hypot(x,y), exp, log, log10, log2, pow (^)\n\
+                 • Shaping / Logic: sign, floor, ceil, round, fract, min, max, clamp(x,lo,hi), lerp(a,b,t), step(edge,x), cond(c,t,f)",
+            );
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(egui::Button::image_and_text(
@@ -90,12 +106,31 @@ pub fn render_equation_list(
                             let mut text = eq_source.clone();
                             let response = ui.add(
                                 egui::TextEdit::singleline(&mut text)
-                                    .desired_width(ui.available_width() - 40.0)
+                                    .desired_width((ui.available_width() - 68.0).max(120.0))
                                     .font(egui::TextStyle::Monospace),
                             );
 
                             if response.changed() {
                                 source_changes.push((i, text));
+                            }
+
+                            // Reorder equation up/down buttons
+                            if ui
+                                .add_enabled(i > 0, egui::Button::new("↑").small())
+                                .on_hover_text("Move equation row up")
+                                .clicked()
+                            {
+                                swap_eq_indices = Some((i, i - 1));
+                            }
+                            if ui
+                                .add_enabled(
+                                    i + 1 < equations_count,
+                                    egui::Button::new("↓").small(),
+                                )
+                                .on_hover_text("Move equation row down")
+                                .clicked()
+                            {
+                                swap_eq_indices = Some((i, i + 1));
                             }
 
                             // Delete equation button
@@ -388,6 +423,13 @@ pub fn render_equation_list(
         }
     }
 
+    // Apply reorder equation
+    if let Some((a, b)) = swap_eq_indices {
+        if a < doc.state.equations.len() && b < doc.state.equations.len() {
+            doc.state.equations.swap(a, b);
+        }
+    }
+
     // Apply delete equation
     if let Some(del_id) = delete_eq_id {
         doc.state.equations.retain(|e| e.id != del_id);
@@ -396,9 +438,19 @@ pub fn render_equation_list(
     // Apply add equation
     if add_equation {
         let new_id = doc.next_equation_id();
-        let next_char = (b'a' + (doc.state.equations.len() as u8 % 26)) as char;
-        let new_src = format!("{next_char}[n+1] = {next_char}[n] * 0.99");
+        let used_vars: Vec<String> = doc
+            .state
+            .equations
+            .iter()
+            .filter_map(|e| extract_target_var(&e.source))
+            .collect();
+        let next_var = (b'a'..=b'z')
+            .map(|c| (c as char).to_string())
+            .find(|cand| !used_vars.contains(cand) && cand != "n" && cand != "e")
+            .unwrap_or_else(|| format!("v{}", doc.state.equations.len() + 1));
+        let new_src = format!("{next_var}[n+1] = {next_var}[n] * 0.96");
         let color_idx = doc.state.equations.len();
+        doc.state.initial_conditions.entry(next_var).or_insert(1.0);
         doc.state.equations.push(crate::document::EquationDoc {
             id: new_id,
             source: new_src,
@@ -437,7 +489,7 @@ fn extract_numeric_literals(source: &str) -> Vec<NumericLiteralSpan> {
     list
 }
 
-fn extract_target_var(source: &str) -> Option<String> {
+pub fn extract_target_var(source: &str) -> Option<String> {
     let mut lexer = Lexer::new(source);
     if let Ok(tok) = lexer.next_token() {
         if let TokenKind::Ident(name) = tok.kind {

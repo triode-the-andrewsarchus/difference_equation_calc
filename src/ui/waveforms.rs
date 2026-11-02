@@ -20,6 +20,8 @@ pub struct WaveformViewport {
     pub drag_start_n: Option<usize>,
     pub is_dragging_init_cond: Option<(String, usize)>,
     pub is_goal_seeking: bool,
+    pub overlay_mode: bool,
+    pub show_sample_dots: bool,
 }
 
 impl Default for WaveformViewport {
@@ -31,12 +33,14 @@ impl Default for WaveformViewport {
             drag_start_n: None,
             is_dragging_init_cond: None,
             is_goal_seeking: false,
+            overlay_mode: false,
+            show_sample_dots: false,
         }
     }
 }
 
 pub struct WaveformRowInfo<'a> {
-    pub name: &'a str,
+    pub name: String,
     pub color: Color32,
     pub values: &'a [f64],
     pub ghost_values: Option<&'a [f64]>,
@@ -81,14 +85,86 @@ pub fn render_waveform_grid(
     }
 
     let sample_count = sim_result.sample_count.max(2);
+
+    // Compact Waveform Viewport Toolbar
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "View n: [{:.0} .. {:.0}]",
+                viewport.x_min.max(0.0),
+                viewport.x_max
+            ))
+            .monospace()
+            .size(11.0)
+            .color(Color32::from_rgb(150, 165, 190)),
+        );
+
+        let is_zoomed = (viewport.x_min - 0.0).abs() > 0.5
+            || (viewport.x_max - sample_count as f64).abs() > 0.5;
+        if ui
+            .add_enabled(is_zoomed, egui::Button::new("Fit All (1:1)").small())
+            .on_hover_text("Reset horizontal zoom to full timeline (or double-click canvas)")
+            .clicked()
+        {
+            viewport.x_min = 0.0;
+            viewport.x_max = sample_count as f64;
+        }
+
+        if let Some((s0, s1)) = selection {
+            if s1 > s0
+                && ui
+                    .small_button("Zoom Selection")
+                    .on_hover_text("Zoom horizontal viewport to active selection range")
+                    .clicked()
+            {
+                let pad = ((s1 - s0) as f64 * 0.1).max(2.0);
+                viewport.x_min = (s0 as f64 - pad).max(0.0);
+                viewport.x_max = (s1 as f64 + pad).min(sample_count as f64);
+            }
+        }
+
+        ui.separator();
+
+        ui.selectable_value(&mut viewport.overlay_mode, false, "Stacked")
+            .on_hover_text("Show each variable in its own aligned horizontal row");
+        ui.selectable_value(&mut viewport.overlay_mode, true, "Overlay All")
+            .on_hover_text("Overlay all state variables on a single shared vertical axis");
+
+        ui.checkbox(&mut viewport.show_sample_dots, "Discrete Stems")
+            .on_hover_text(
+                "Highlight discrete timestep samples n (automatically shown when zoomed in)",
+            );
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Drag: Select · Alt+Drag: Goal-Seek · Drag n=0: Init · Scroll/R-Drag: Zoom/Pan",
+                )
+                .size(10.0)
+                .color(Color32::from_rgb(115, 125, 145)),
+            );
+        });
+    });
+
+    ui.add_space(2.0);
+
     let total_width = ui.available_width().max(200.0);
     let row_height = 100.0;
-    let total_height = (rows.len() as f32) * row_height;
+    let total_height = if viewport.overlay_mode {
+        (rows.len() as f32 * row_height).clamp(220.0, 360.0)
+    } else {
+        (rows.len() as f32) * row_height
+    };
 
     let (response, painter) =
         ui.allocate_painter(vec2(total_width, total_height), Sense::click_and_drag());
 
     let canvas_rect = response.rect;
+
+    if response.double_clicked() {
+        viewport.x_min = 0.0;
+        viewport.x_max = sample_count as f64;
+    }
 
     // Viewport pan & zoom interaction
     handle_viewport_input(ui, &response, viewport, sample_count, canvas_rect);
@@ -190,27 +266,31 @@ pub fn render_waveform_grid(
     // Grid lines for time/n
     draw_time_grid(&painter, canvas_rect, viewport, &x_to_screen);
 
-    // Render individual waveform rows
-    for (idx, row) in rows.iter().enumerate() {
-        let row_top = canvas_rect.top() + (idx as f32) * row_height;
-        let row_bottom = row_top + row_height;
-        let row_rect = Rect::from_min_max(
-            pos2(canvas_rect.left(), row_top),
-            pos2(canvas_rect.right(), row_bottom),
-        );
-
-        // Separator line
-        if idx > 0 {
-            painter.line_segment(
-                [
-                    pos2(canvas_rect.left(), row_top),
-                    pos2(canvas_rect.right(), row_top),
-                ],
-                Stroke::new(1.0_f32, Color32::from_rgb(35, 38, 48)),
+    // Render individual waveform rows or shared overlay
+    if viewport.overlay_mode {
+        render_overlay_rows(&painter, canvas_rect, rows, viewport, &x_to_screen);
+    } else {
+        for (idx, row) in rows.iter().enumerate() {
+            let row_top = canvas_rect.top() + (idx as f32) * row_height;
+            let row_bottom = row_top + row_height;
+            let row_rect = Rect::from_min_max(
+                pos2(canvas_rect.left(), row_top),
+                pos2(canvas_rect.right(), row_bottom),
             );
-        }
 
-        render_single_row(&painter, row_rect, row, viewport, &x_to_screen);
+            // Separator line
+            if idx > 0 {
+                painter.line_segment(
+                    [
+                        pos2(canvas_rect.left(), row_top),
+                        pos2(canvas_rect.right(), row_top),
+                    ],
+                    Stroke::new(1.0_f32, Color32::from_rgb(35, 38, 48)),
+                );
+            }
+
+            render_single_row(&painter, row_rect, row, viewport, &x_to_screen);
+        }
     }
 
     // Draw failure marker if simulation failed at some step
@@ -644,7 +724,7 @@ fn render_single_row(
     painter.text(
         pos2(row_rect.left() + 8.0, row_rect.top() + 6.0),
         egui::Align2::LEFT_TOP,
-        row.name,
+        &row.name,
         FontId::proportional(14.0),
         row.color,
     );
@@ -782,7 +862,33 @@ fn render_single_row(
     }
 
     if points.len() >= 2 {
-        painter.add(egui::Shape::line(points, Stroke::new(1.8_f32, row.color)));
+        painter.add(egui::Shape::line(
+            points.clone(),
+            Stroke::new(1.8_f32, row.color),
+        ));
+    }
+
+    // Discrete sample dots & stems when zoomed in or toggled
+    let visible_span = end_idx.saturating_sub(start_idx);
+    if (viewport.show_sample_dots || visible_span <= 75) && visible_span <= 300 {
+        let stem_zero = zero_y.clamp(row_rect.top(), row_rect.bottom());
+        for &pt in &points {
+            if viewport.show_sample_dots && visible_span <= 140 {
+                painter.line_segment(
+                    [pos2(pt.x, stem_zero), pt],
+                    Stroke::new(
+                        1.0_f32,
+                        Color32::from_rgba_unmultiplied(
+                            row.color.r(),
+                            row.color.g(),
+                            row.color.b(),
+                            65,
+                        ),
+                    ),
+                );
+            }
+            painter.circle_filled(pt, 2.6_f32, row.color);
+        }
     }
 
     // Highlight clipped peaks with red indicator dots
@@ -808,6 +914,111 @@ fn render_single_row(
             FontId::monospace(9.0),
             Color32::from_rgb(180, 220, 200),
         );
+    }
+}
+
+fn render_overlay_rows(
+    painter: &Painter,
+    rect: Rect,
+    rows: &[WaveformRowInfo],
+    viewport: &WaveformViewport,
+    x_to_screen: &impl Fn(f64) -> f32,
+) {
+    let mut global_min = f64::INFINITY;
+    let mut global_max = f64::NEG_INFINITY;
+    for row in rows {
+        let (r_min, r_max) = get_row_bounds(
+            row.values,
+            viewport.x_min,
+            viewport.x_max,
+            row.clamp_threshold,
+        );
+        global_min = global_min.min(r_min);
+        global_max = global_max.max(r_max);
+    }
+    if !global_min.is_finite() || !global_max.is_finite() {
+        global_min = -1.0;
+        global_max = 1.0;
+    }
+
+    let y_to_screen = |val: f64| -> f32 {
+        let norm = ((val - global_min) / (global_max - global_min).max(1e-6)).clamp(0.0, 1.0);
+        rect.bottom() - (norm as f32) * rect.height()
+    };
+
+    let zero_y = y_to_screen(0.0);
+    if zero_y >= rect.top() && zero_y <= rect.bottom() {
+        painter.line_segment(
+            [pos2(rect.left(), zero_y), pos2(rect.right(), zero_y)],
+            Stroke::new(1.0_f32, Color32::from_rgb(38, 42, 54)),
+        );
+    }
+
+    painter.text(
+        pos2(rect.right() - 6.0, rect.top() + 4.0),
+        egui::Align2::RIGHT_TOP,
+        format!("+{}", format_compact_value(global_max)),
+        FontId::monospace(9.0),
+        Color32::from_rgb(90, 95, 110),
+    );
+    painter.text(
+        pos2(rect.right() - 6.0, rect.bottom() - 4.0),
+        egui::Align2::RIGHT_BOTTOM,
+        format_compact_value(global_min),
+        FontId::monospace(9.0),
+        Color32::from_rgb(90, 95, 110),
+    );
+
+    for (r_idx, row) in rows.iter().enumerate() {
+        // Legend badge at top left
+        painter.text(
+            pos2(rect.left() + 10.0 + (r_idx as f32) * 56.0, rect.top() + 6.0),
+            egui::Align2::LEFT_TOP,
+            &row.name,
+            FontId::proportional(13.0),
+            row.color,
+        );
+
+        let values = row.values;
+        if values.is_empty() {
+            continue;
+        }
+        let start_idx = (viewport.x_min.floor().max(0.0) as usize).min(values.len());
+        let end_idx = (viewport.x_max.ceil().max(0.0) as usize).min(values.len());
+        let sample_step = if (end_idx - start_idx) > 2000 { 2 } else { 1 };
+
+        let mut points = Vec::new();
+        for i in (start_idx..end_idx).step_by(sample_step) {
+            let v = if let Some(th) = row.clamp_threshold {
+                values[i].clamp(-th, th)
+            } else {
+                values[i]
+            };
+            if v.is_finite() {
+                points.push(pos2(x_to_screen(i as f64), y_to_screen(v)));
+            } else {
+                if points.len() >= 2 {
+                    painter.add(egui::Shape::line(
+                        points.clone(),
+                        Stroke::new(1.8_f32, row.color),
+                    ));
+                }
+                points.clear();
+            }
+        }
+        if points.len() >= 2 {
+            painter.add(egui::Shape::line(
+                points.clone(),
+                Stroke::new(1.8_f32, row.color),
+            ));
+        }
+
+        let visible_span = end_idx.saturating_sub(start_idx);
+        if (viewport.show_sample_dots || visible_span <= 75) && visible_span <= 300 {
+            for &pt in &points {
+                painter.circle_filled(pt, 2.5_f32, row.color);
+            }
+        }
     }
 }
 

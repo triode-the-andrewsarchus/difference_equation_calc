@@ -40,6 +40,8 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
                 .italics(),
             );
         } else {
+            let active_sweep_param = doc.state.sweep_config.parameter_name.clone();
+            let mut new_sweep_param: Option<(String, f64, f64)> = None;
             let param_count = doc.state.parameters.len();
             for i in 0..param_count {
                 let p = &mut doc.state.parameters[i];
@@ -71,13 +73,36 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
                     norm_val >= zone.start_norm - 0.015 && norm_val <= zone.end_norm + 0.015
                 });
 
+                let is_swept = p.name == active_sweep_param;
+
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&p.name)
-                            .monospace()
-                            .strong()
-                            .color(Color32::from_rgb(255, 200, 100)),
-                    );
+                    let badge_text = if is_swept {
+                        format!("● {}", p.name)
+                    } else {
+                        p.name.clone()
+                    };
+                    let badge_color = if is_swept {
+                        Color32::from_rgb(0, 225, 255)
+                    } else {
+                        Color32::from_rgb(255, 200, 100)
+                    };
+
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(badge_text)
+                                    .monospace()
+                                    .strong()
+                                    .size(11.5)
+                                    .color(badge_color),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Click to select this parameter as the active Sweep axis")
+                        .clicked()
+                    {
+                        new_sweep_param = Some((p.name.clone(), p.min, p.max));
+                    }
 
                     let slider = egui::Slider::new(&mut p.value, p.min..=p.max)
                         .step_by(p.step)
@@ -128,11 +153,38 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
                         ));
                     }
 
-                    ui.label(
-                        egui::RichText::new(format!("[{:.2} .. {:.2}]", p.min, p.max))
-                            .size(10.0)
-                            .color(Color32::from_rgb(110, 120, 140)),
-                    );
+                    // Interactive min..max range bounds
+                    let mut min_v = p.min;
+                    let mut max_v = p.max;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut min_v)
+                                .speed(0.02)
+                                .prefix("[")
+                                .max_decimals(2),
+                        )
+                        .on_hover_text("Drag to adjust parameter minimum bound")
+                        .changed()
+                    {
+                        p.min = min_v.min(p.max - 1e-4);
+                        p.value = p.value.clamp(p.min, p.max);
+                        p.step = ((p.max - p.min) / 250.0).max(1e-5);
+                    }
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut max_v)
+                                .speed(0.02)
+                                .prefix("..")
+                                .suffix("]")
+                                .max_decimals(2),
+                        )
+                        .on_hover_text("Drag to adjust parameter maximum bound")
+                        .changed()
+                    {
+                        p.max = max_v.max(p.min + 1e-4);
+                        p.value = p.value.clamp(p.min, p.max);
+                        p.step = ((p.max - p.min) / 250.0).max(1e-5);
+                    }
 
                     if ui
                         .add(egui::Button::image(
@@ -145,6 +197,12 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
                     }
                 });
             }
+
+            if let Some((name, min_v, max_v)) = new_sweep_param {
+                doc.state.sweep_config.parameter_name = name;
+                doc.state.sweep_config.min_val = min_v;
+                doc.state.sweep_config.max_val = max_v;
+            }
         }
 
         ui.add_space(6.0);
@@ -152,14 +210,37 @@ pub fn render_parameters_panel(ui: &mut Ui, doc: &mut Document, parsed_equations
         ui.add_space(4.0);
 
         // Direct manipulation of Initial Conditions at n = 0
+        let mut zero_all_inits = false;
         ui.horizontal(|ui| {
             ui.heading(
                 egui::RichText::new("Initial Conditions (n = 0)")
                     .size(13.0)
                     .strong(),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("Zero All")
+                    .on_hover_text("Set all initial conditions at n = 0 to 0.0")
+                    .clicked()
+                {
+                    zero_all_inits = true;
+                }
+            });
         });
         ui.add_space(2.0);
+
+        // Ensure all parsed equation target variables have an entry in initial_conditions
+        for eq in parsed_equations {
+            doc.state
+                .initial_conditions
+                .entry(eq.target_var.clone())
+                .or_insert(0.0);
+        }
+        if zero_all_inits {
+            for val in doc.state.initial_conditions.values_mut() {
+                *val = 0.0;
+            }
+        }
 
         let mut init_keys: Vec<String> = doc.state.initial_conditions.keys().cloned().collect();
         init_keys.sort();
