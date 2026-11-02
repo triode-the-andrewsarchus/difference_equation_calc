@@ -1,27 +1,40 @@
 use crate::ast::Equation;
-use crate::sim::{compute_phase_field, SimulationResult};
+use crate::measure::compute_spectrum;
+use crate::sim::{compute_phase_field, compute_return_map_curve, SimulationResult};
 use crate::ui::format::format_compact_value;
 use egui::{pos2, vec2, Color32, FontId, Rect, Sense, Stroke, StrokeKind, Ui};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PhaseViewMode {
+    #[default]
+    PhasePortrait,
+    CobwebReturn,
+    SpectrumFft,
+}
+
 #[derive(Debug, Clone)]
 pub struct PhaseViewState {
+    pub mode: PhaseViewMode,
     pub var_x: String,
     pub var_y: String,
     pub show_ghost: bool,
     pub show_vector_field: bool,
     pub show_nullclines: bool,
+    pub spectrum_db: bool,
     pub is_dragging_initial_pos: bool,
 }
 
 impl Default for PhaseViewState {
     fn default() -> Self {
         Self {
+            mode: PhaseViewMode::PhasePortrait,
             var_x: "a".to_string(),
             var_y: "b".to_string(),
             show_ghost: true,
             show_vector_field: true,
             show_nullclines: true,
+            spectrum_db: true,
             is_dragging_initial_pos: false,
         }
     }
@@ -50,11 +63,22 @@ pub fn render_phase_panel(
 
     ui.group(|ui| {
         ui.horizontal(|ui| {
-            ui.heading(
-                egui::RichText::new("Phase Portrait (State Space)")
-                    .size(14.0)
-                    .strong(),
-            );
+            ui.selectable_value(&mut state.mode, PhaseViewMode::PhasePortrait, "2D Phase")
+                .on_hover_text(
+                    "2D State Space Portrait (X[n] vs Y[n]) with vector field & nullclines",
+                );
+            ui.selectable_value(
+                &mut state.mode,
+                PhaseViewMode::CobwebReturn,
+                "Cobweb / Return",
+            )
+            .on_hover_text("1D Return Map (X[n] vs X[n+1]) with y=x diagonal and cobweb orbit");
+            ui.selectable_value(
+                &mut state.mode,
+                PhaseViewMode::SpectrumFft,
+                "Spectrum (FFT)",
+            )
+            .on_hover_text("Frequency domain magnitude spectrum (Hann-windowed FFT)");
 
             ui.separator();
 
@@ -75,7 +99,11 @@ pub fn render_phase_panel(
             }
 
             // X Variable selector
-            ui.label("X:");
+            ui.label(if state.mode == PhaseViewMode::PhasePortrait {
+                "X:"
+            } else {
+                "Var:"
+            });
             egui::ComboBox::from_id_salt("phase_var_x")
                 .selected_text(&state.var_x)
                 .show_ui(ui, |ui| {
@@ -84,25 +112,62 @@ pub fn render_phase_panel(
                     }
                 });
 
-            // Y Variable selector
-            ui.label("Y:");
-            egui::ComboBox::from_id_salt("phase_var_y")
-                .selected_text(&state.var_y)
-                .show_ui(ui, |ui| {
-                    for v in &vars {
-                        ui.selectable_value(&mut state.var_y, v.clone(), v);
+            match state.mode {
+                PhaseViewMode::PhasePortrait => {
+                    // Y Variable selector
+                    ui.label("Y:");
+                    egui::ComboBox::from_id_salt("phase_var_y")
+                        .selected_text(&state.var_y)
+                        .show_ui(ui, |ui| {
+                            for v in &vars {
+                                ui.selectable_value(&mut state.var_y, v.clone(), v);
+                            }
+                        });
+
+                    ui.checkbox(&mut state.show_vector_field, "Field");
+                    ui.checkbox(&mut state.show_nullclines, "Nullclines");
+
+                    if ghost_sim.is_some() {
+                        ui.checkbox(&mut state.show_ghost, "Ghost");
                     }
-                });
-
-            ui.checkbox(&mut state.show_vector_field, "Field");
-            ui.checkbox(&mut state.show_nullclines, "Nullclines");
-
-            if ghost_sim.is_some() {
-                ui.checkbox(&mut state.show_ghost, "Ghost orbit");
+                }
+                PhaseViewMode::CobwebReturn => {
+                    if ghost_sim.is_some() {
+                        ui.checkbox(&mut state.show_ghost, "Ghost");
+                    }
+                }
+                PhaseViewMode::SpectrumFft => {
+                    ui.checkbox(&mut state.spectrum_db, "dB Scale");
+                    if ghost_sim.is_some() {
+                        ui.checkbox(&mut state.show_ghost, "Ghost");
+                    }
+                }
             }
         });
 
         ui.add_space(4.0);
+
+        if state.mode == PhaseViewMode::SpectrumFft {
+            render_spectrum_canvas(ui, sim_result, ghost_sim, selection, state);
+            return;
+        }
+
+        if state.mode == PhaseViewMode::CobwebReturn {
+            render_cobweb_canvas(
+                ui,
+                sim_result,
+                ghost_sim,
+                cursor_step,
+                selection,
+                equations,
+                initial_conditions,
+                parameters,
+                clamp_threshold,
+                state,
+                &mut response_action,
+            );
+            return;
+        }
 
         let series_x = sim_result.series.get(&state.var_x);
         let series_y = sim_result.series.get(&state.var_y);
@@ -562,4 +627,420 @@ pub fn render_phase_panel(
     });
 
     response_action
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_cobweb_canvas(
+    ui: &mut Ui,
+    sim_result: &SimulationResult,
+    ghost_sim: Option<&SimulationResult>,
+    cursor_step: Option<usize>,
+    selection: Option<(usize, usize)>,
+    equations: &[Equation],
+    initial_conditions: &HashMap<String, f64>,
+    parameters: &HashMap<String, f64>,
+    clamp_threshold: Option<f64>,
+    state: &mut PhaseViewState,
+    response_action: &mut PhasePanelResponse,
+) {
+    let Some(series_x) = sim_result.series.get(&state.var_x) else {
+        ui.label("Selected state variable not found.");
+        return;
+    };
+    let xs = &series_x.values;
+    if xs.len() < 2 {
+        ui.label("Insufficient points for return map.");
+        return;
+    }
+
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+    for &x in xs {
+        let cx = if let Some(th) = clamp_threshold {
+            x.clamp(-th, th)
+        } else {
+            x
+        };
+        if cx.is_finite() {
+            min_v = min_v.min(cx);
+            max_v = max_v.max(cx);
+        }
+    }
+    if !min_v.is_finite() || !max_v.is_finite() {
+        min_v = -1.0;
+        max_v = 1.0;
+    }
+    let span = (max_v - min_v).max(0.1) * 1.15;
+    let center = (min_v + max_v) * 0.5;
+    let (plot_min, plot_max) = if let Some(th) = clamp_threshold {
+        (-th * 1.08, th * 1.08)
+    } else {
+        (center - span * 0.5, center + span * 0.5)
+    };
+
+    let canvas_size = vec2(ui.available_width().max(200.0), 220.0);
+    let (response, painter) = ui.allocate_painter(canvas_size, Sense::click_and_drag());
+    let rect = response.rect;
+    painter.rect_filled(rect, 4.0_f32, Color32::from_rgb(18, 20, 26));
+
+    let to_screen = |x: f64, y: f64| -> egui::Pos2 {
+        let nx = ((x - plot_min) / (plot_max - plot_min).max(1e-6)).clamp(0.0, 1.0);
+        let ny = ((y - plot_min) / (plot_max - plot_min).max(1e-6)).clamp(0.0, 1.0);
+        pos2(
+            rect.left() + (nx as f32) * rect.width(),
+            rect.bottom() - (ny as f32) * rect.height(),
+        )
+    };
+
+    let screen_to_val = |sx: f32| -> f64 {
+        let nx = ((sx - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) as f64;
+        plot_min + nx * (plot_max - plot_min)
+    };
+
+    // Diagonal identity line y = x
+    let diag_p0 = to_screen(plot_min, plot_min);
+    let diag_p1 = to_screen(plot_max, plot_max);
+    painter.line_segment(
+        [diag_p0, diag_p1],
+        Stroke::new(1.0_f32, Color32::from_rgb(60, 70, 90)),
+    );
+
+    // 1-step map curve f(x)
+    let curve_pts = compute_return_map_curve(
+        equations,
+        &state.var_x,
+        initial_conditions,
+        parameters,
+        plot_min,
+        plot_max,
+        80,
+    );
+    if curve_pts.len() >= 2 {
+        let screen_curve: Vec<egui::Pos2> = curve_pts
+            .into_iter()
+            .map(|(x, y)| to_screen(x, y))
+            .collect();
+        painter.add(egui::Shape::line(
+            screen_curve,
+            Stroke::new(1.5_f32, Color32::from_rgba_unmultiplied(255, 130, 200, 150)),
+        ));
+    }
+
+    // Ghost cobweb if enabled
+    if state.show_ghost {
+        if let Some(ghost) = ghost_sim {
+            if let Some(g_series) = ghost.series.get(&state.var_x) {
+                let gxs = &g_series.values;
+                let mut g_pts = Vec::new();
+                for i in 0..gxs.len().saturating_sub(1).min(400) {
+                    if gxs[i].is_finite() && gxs[i + 1].is_finite() {
+                        g_pts.push(to_screen(gxs[i], gxs[i]));
+                        g_pts.push(to_screen(gxs[i], gxs[i + 1]));
+                    }
+                }
+                if g_pts.len() >= 2 {
+                    painter.add(egui::Shape::line(
+                        g_pts,
+                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(140, 150, 180, 50)),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Cobweb staircase (x[n], x[n]) -> (x[n], x[n+1]) -> (x[n+1], x[n+1])
+    let (s0, s1) = selection.unwrap_or((0, xs.len().saturating_sub(2)));
+    let end_i = s1.min(xs.len().saturating_sub(2));
+    let start_i = s0.min(end_i);
+    let max_draw = (end_i.saturating_sub(start_i) + 1).min(300);
+
+    let mut cobweb_line = Vec::with_capacity(max_draw * 2 + 1);
+    for i in start_i..(start_i + max_draw) {
+        let x0 = xs[i];
+        let x1 = xs[i + 1];
+        if x0.is_finite() && x1.is_finite() {
+            if cobweb_line.is_empty() {
+                cobweb_line.push(to_screen(x0, x0));
+            }
+            let pt_map = to_screen(x0, x1);
+            let pt_diag = to_screen(x1, x1);
+            cobweb_line.push(pt_map);
+            cobweb_line.push(pt_diag);
+            painter.circle_filled(pt_map, 2.0, Color32::from_rgb(0, 220, 255));
+        }
+    }
+    if cobweb_line.len() >= 2 {
+        painter.add(egui::Shape::line(
+            cobweb_line,
+            Stroke::new(1.3_f32, Color32::from_rgba_unmultiplied(0, 220, 255, 190)),
+        ));
+    }
+
+    // Start handle at x[0]
+    let p_start = to_screen(xs[0], xs[0]);
+    painter.circle_stroke(
+        p_start,
+        6.0,
+        Stroke::new(1.4_f32, Color32::from_rgb(255, 230, 80)),
+    );
+    painter.circle_filled(p_start, 3.5, Color32::from_rgb(70, 240, 150));
+
+    // Active cursor step highlight
+    if let Some(step) = cursor_step {
+        if step + 1 < xs.len() && xs[step].is_finite() && xs[step + 1].is_finite() {
+            let p_cur = to_screen(xs[step], xs[step + 1]);
+            painter.circle_stroke(p_cur, 7.0, Stroke::new(1.5_f32, Color32::WHITE));
+            painter.circle_filled(p_cur, 4.0, Color32::from_rgb(255, 220, 50));
+            painter.text(
+                pos2(rect.right() - 8.0, rect.top() + 8.0),
+                egui::Align2::RIGHT_TOP,
+                format!(
+                    "n={step}: {} ➔ {}",
+                    format_compact_value(xs[step]),
+                    format_compact_value(xs[step + 1])
+                ),
+                FontId::monospace(10.5),
+                Color32::from_rgb(255, 230, 80),
+            );
+        }
+    }
+
+    // Drag start point to change initial condition x[0]
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        if let Some(ptr) = response.interact_pointer_pos() {
+            if (ptr - p_start).length() <= 18.0 {
+                state.is_dragging_initial_pos = true;
+            }
+        }
+    }
+    if state.is_dragging_initial_pos {
+        if let Some(ptr) = response.interact_pointer_pos() {
+            let new_x0 = screen_to_val(ptr.x);
+            response_action
+                .new_initial_conditions
+                .push((state.var_x.clone(), new_x0));
+        }
+        if response.drag_stopped() {
+            state.is_dragging_initial_pos = false;
+        }
+    }
+
+    painter.text(
+        pos2(rect.left() + 8.0, rect.bottom() - 6.0),
+        egui::Align2::LEFT_BOTTOM,
+        format!("{}[n]", state.var_x),
+        FontId::monospace(10.5),
+        Color32::from_rgb(130, 140, 160),
+    );
+    painter.text(
+        pos2(rect.left() + 8.0, rect.top() + 6.0),
+        egui::Align2::LEFT_TOP,
+        format!("{}[n+1]  (Cobweb & Return Map)", state.var_x),
+        FontId::monospace(10.5),
+        Color32::from_rgb(255, 160, 210),
+    );
+}
+
+fn render_spectrum_canvas(
+    ui: &mut Ui,
+    sim_result: &SimulationResult,
+    ghost_sim: Option<&SimulationResult>,
+    selection: Option<(usize, usize)>,
+    state: &PhaseViewState,
+) {
+    let Some(series_x) = sim_result.series.get(&state.var_x) else {
+        ui.label("Selected state variable not found.");
+        return;
+    };
+    let vals = &series_x.values;
+    if vals.len() < 4 {
+        ui.label("Insufficient samples for FFT spectrum.");
+        return;
+    }
+
+    let (s0, s1) = selection.unwrap_or((0, vals.len().saturating_sub(1)));
+    let actual_end = s1.min(vals.len().saturating_sub(1));
+    let slice = if s0 <= actual_end {
+        &vals[s0..=actual_end]
+    } else {
+        vals
+    };
+
+    let spec = compute_spectrum(slice);
+
+    let canvas_size = vec2(ui.available_width().max(200.0), 220.0);
+    let (response, painter) = ui.allocate_painter(canvas_size, Sense::hover());
+    let rect = response.rect;
+    painter.rect_filled(rect, 4.0_f32, Color32::from_rgb(18, 20, 26));
+
+    let pad_left = 42.0;
+    let pad_right = 12.0;
+    let pad_top = 22.0;
+    let pad_bottom = 22.0;
+    let plot_rect = Rect::from_min_max(
+        pos2(rect.left() + pad_left, rect.top() + pad_top),
+        pos2(rect.right() - pad_right, rect.bottom() - pad_bottom),
+    );
+
+    let (y_min, y_max) = if state.spectrum_db {
+        (-80.0, (spec.peak_db + 6.0).max(6.0))
+    } else {
+        (0.0, (spec.peak_mag * 1.15).max(0.1))
+    };
+
+    let freq_to_x = |f: f64| -> f32 {
+        let norm = (f / 0.5).clamp(0.0, 1.0);
+        plot_rect.left() + (norm as f32) * plot_rect.width()
+    };
+
+    let val_to_y = |v: f64| -> f32 {
+        let norm = ((v - y_min) / (y_max - y_min).max(1e-6)).clamp(0.0, 1.0);
+        plot_rect.bottom() - (norm as f32) * plot_rect.height()
+    };
+
+    // Grid lines
+    for &f_tick in &[0.0, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5] {
+        let sx = freq_to_x(f_tick);
+        painter.line_segment(
+            [pos2(sx, plot_rect.top()), pos2(sx, plot_rect.bottom())],
+            Stroke::new(1.0_f32, Color32::from_rgb(28, 32, 42)),
+        );
+        painter.text(
+            pos2(sx, plot_rect.bottom() + 4.0),
+            egui::Align2::CENTER_TOP,
+            format!("{f_tick:.2}"),
+            FontId::monospace(8.5),
+            Color32::from_rgb(110, 120, 140),
+        );
+    }
+
+    // Y axis labels
+    painter.text(
+        pos2(plot_rect.left() - 4.0, plot_rect.top()),
+        egui::Align2::RIGHT_TOP,
+        if state.spectrum_db {
+            format!("{:.0}dB", y_max)
+        } else {
+            format_compact_value(y_max)
+        },
+        FontId::monospace(8.5),
+        Color32::from_rgb(110, 120, 140),
+    );
+    painter.text(
+        pos2(plot_rect.left() - 4.0, plot_rect.bottom()),
+        egui::Align2::RIGHT_BOTTOM,
+        if state.spectrum_db {
+            format!("{:.0}dB", y_min)
+        } else {
+            "0".to_string()
+        },
+        FontId::monospace(8.5),
+        Color32::from_rgb(110, 120, 140),
+    );
+
+    // Ghost spectrum if available
+    if state.show_ghost {
+        if let Some(ghost) = ghost_sim {
+            if let Some(g_series) = ghost.series.get(&state.var_x) {
+                let g_end = s1.min(g_series.values.len().saturating_sub(1));
+                if s0 <= g_end {
+                    let g_spec = compute_spectrum(&g_series.values[s0..=g_end]);
+                    let g_pts: Vec<egui::Pos2> = g_spec
+                        .bins
+                        .iter()
+                        .map(|b| {
+                            let yv = if state.spectrum_db {
+                                b.mag_db
+                            } else {
+                                b.magnitude
+                            };
+                            pos2(freq_to_x(b.freq), val_to_y(yv))
+                        })
+                        .collect();
+                    if g_pts.len() >= 2 {
+                        painter.add(egui::Shape::line(
+                            g_pts,
+                            Stroke::new(
+                                1.2_f32,
+                                Color32::from_rgba_unmultiplied(150, 165, 200, 80),
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Active spectrum polyline
+    let pts: Vec<egui::Pos2> = spec
+        .bins
+        .iter()
+        .map(|b| {
+            let yv = if state.spectrum_db {
+                b.mag_db
+            } else {
+                b.magnitude
+            };
+            pos2(freq_to_x(b.freq), val_to_y(yv))
+        })
+        .collect();
+    if pts.len() >= 2 {
+        painter.add(egui::Shape::line(
+            pts,
+            Stroke::new(1.8_f32, Color32::from_rgb(0, 225, 255)),
+        ));
+    }
+
+    // Highlight Peak Frequency
+    if spec.peak_mag > 1e-5 {
+        let px = freq_to_x(spec.peak_freq);
+        let py = val_to_y(if state.spectrum_db {
+            spec.peak_db
+        } else {
+            spec.peak_mag
+        });
+        painter.circle_filled(pos2(px, py), 4.0, Color32::from_rgb(255, 215, 70));
+        let period_str = if spec.peak_freq > 1e-4 {
+            format!("T={:.1}", 1.0 / spec.peak_freq)
+        } else {
+            "DC".to_string()
+        };
+        painter.text(
+            pos2(rect.right() - 8.0, rect.top() + 5.0),
+            egui::Align2::RIGHT_TOP,
+            format!(
+                "Peak f={:.4} cyc/step ({period_str}) · {:.1} dB",
+                spec.peak_freq, spec.peak_db
+            ),
+            FontId::monospace(10.0),
+            Color32::from_rgb(255, 225, 90),
+        );
+    }
+
+    // Hover readout
+    if let Some(ptr) = response.hover_pos() {
+        if plot_rect.contains(ptr) {
+            let norm_f = ((ptr.x - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0) as f64;
+            let f_hover = norm_f * 0.5;
+            painter.line_segment(
+                [
+                    pos2(ptr.x, plot_rect.top()),
+                    pos2(ptr.x, plot_rect.bottom()),
+                ],
+                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 130)),
+            );
+            let period = if f_hover > 1e-4 {
+                format!("T={:.1} steps", 1.0 / f_hover)
+            } else {
+                "DC".to_string()
+            };
+            painter.text(
+                pos2(rect.left() + pad_left + 4.0, rect.top() + 5.0),
+                egui::Align2::LEFT_TOP,
+                format!("Cursor: f={f_hover:.4} ({period})"),
+                FontId::monospace(10.0),
+                Color32::from_rgb(180, 230, 255),
+            );
+        }
+    }
 }

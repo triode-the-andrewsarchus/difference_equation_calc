@@ -57,19 +57,40 @@ pub fn render_measurements_panel(
             .selection
             .unwrap_or((0, sim_result.sample_count.saturating_sub(1)));
 
-        // Iterate variables that exist in simulation result
-        let mut var_names: Vec<_> = sim_result.series.keys().cloned().collect();
-        var_names.sort();
+        // Order variables matching the document equation list and preserve their trace color
+        let mut ordered_vars: Vec<(String, Color32)> = Vec::new();
+        for eq_doc in &doc.state.equations {
+            if let Some(target) = crate::ui::equation_view::extract_target_var(&eq_doc.source) {
+                if sim_result.series.contains_key(&target)
+                    && !ordered_vars.iter().any(|(v, _)| v == &target)
+                {
+                    let color = TRACE_COLORS[eq_doc.color_idx % TRACE_COLORS.len()];
+                    ordered_vars.push((target, color));
+                }
+            }
+        }
+        // Include any remaining series not matched above
+        let mut extra_vars: Vec<_> = sim_result
+            .series
+            .keys()
+            .filter(|k| !ordered_vars.iter().any(|(v, _)| v == *k))
+            .cloned()
+            .collect();
+        extra_vars.sort();
+        for var in extra_vars {
+            let color = TRACE_COLORS[ordered_vars.len() % TRACE_COLORS.len()];
+            ordered_vars.push((var, color));
+        }
 
-        if var_names.is_empty() {
+        if ordered_vars.is_empty() {
             ui.label("No simulation data available.");
             return;
         }
 
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (v_idx, var) in var_names.iter().enumerate() {
-                    let color = TRACE_COLORS[v_idx % TRACE_COLORS.len()];
+                for (var, color) in &ordered_vars {
+                    let color = *color;
 
                     ui.vertical(|ui| {
                         // Header card for variable
@@ -91,10 +112,15 @@ pub fn render_measurements_panel(
                                     .show(ui, |ui| {
                                         let types_to_show = [
                                             MeasurementType::Mean,
+                                            MeasurementType::Rms,
+                                            MeasurementType::StdDev,
                                             MeasurementType::Min,
                                             MeasurementType::Max,
                                             MeasurementType::Range,
-                                            MeasurementType::Rms,
+                                            MeasurementType::Overshoot,
+                                            MeasurementType::SettlingSteps,
+                                            MeasurementType::DomFreq,
+                                            MeasurementType::ZeroCrossings,
                                             MeasurementType::Delta,
                                         ];
 
