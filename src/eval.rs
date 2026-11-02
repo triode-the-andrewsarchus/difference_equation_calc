@@ -84,6 +84,7 @@ impl<'a> EvalContext for SlicedContext<'a> {
         match name {
             "n" => Some(self.current_step as f64),
             "pi" | "PI" => Some(std::f64::consts::PI),
+            "tau" | "TAU" => Some(std::f64::consts::TAU),
             "e" | "E" => Some(std::f64::consts::E),
             _ => self.parameters.get(name).copied(),
         }
@@ -279,12 +280,32 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
             let v = eval_expr(&args[0], ctx)?;
             Ok(v.atan())
         }
+        "asin" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            if !(-1.0..=1.0).contains(&v) {
+                return Err(EvalError::DomainError(format!(
+                    "asin argument {v} out of [-1, 1]"
+                )));
+            }
+            Ok(v.asin())
+        }
+        "acos" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            if !(-1.0..=1.0).contains(&v) {
+                return Err(EvalError::DomainError(format!(
+                    "acos argument {v} out of [-1, 1]"
+                )));
+            }
+            Ok(v.acos())
+        }
         "exp" => {
             check_arg_count(func, args, 1)?;
             let v = eval_expr(&args[0], ctx)?;
             Ok(v.exp())
         }
-        "log" => {
+        "log" | "ln" => {
             check_arg_count(func, args, 1)?;
             let v = eval_expr(&args[0], ctx)?;
             if v <= 0.0 {
@@ -293,6 +314,26 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
                 )));
             }
             Ok(v.ln())
+        }
+        "log10" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            if v <= 0.0 {
+                return Err(EvalError::DomainError(format!(
+                    "log10 of non-positive value {v}"
+                )));
+            }
+            Ok(v.log10())
+        }
+        "log2" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            if v <= 0.0 {
+                return Err(EvalError::DomainError(format!(
+                    "log2 of non-positive value {v}"
+                )));
+            }
+            Ok(v.log2())
         }
         "floor" => {
             check_arg_count(func, args, 1)?;
@@ -309,6 +350,22 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
             let v = eval_expr(&args[0], ctx)?;
             Ok(v.round())
         }
+        "sign" | "sgn" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            Ok(if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                0.0
+            })
+        }
+        "fract" => {
+            check_arg_count(func, args, 1)?;
+            let v = eval_expr(&args[0], ctx)?;
+            Ok(v - v.floor())
+        }
         "min" => {
             check_arg_count(func, args, 2)?;
             let a = eval_expr(&args[0], ctx)?;
@@ -320,6 +377,24 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
             let a = eval_expr(&args[0], ctx)?;
             let b = eval_expr(&args[1], ctx)?;
             Ok(a.max(b))
+        }
+        "atan2" => {
+            check_arg_count(func, args, 2)?;
+            let y = eval_expr(&args[0], ctx)?;
+            let x = eval_expr(&args[1], ctx)?;
+            Ok(y.atan2(x))
+        }
+        "hypot" => {
+            check_arg_count(func, args, 2)?;
+            let x = eval_expr(&args[0], ctx)?;
+            let y = eval_expr(&args[1], ctx)?;
+            Ok(x.hypot(y))
+        }
+        "step" => {
+            check_arg_count(func, args, 2)?;
+            let edge = eval_expr(&args[0], ctx)?;
+            let x = eval_expr(&args[1], ctx)?;
+            Ok(if x >= edge { 1.0 } else { 0.0 })
         }
         "cond" => {
             check_arg_count(func, args, 3)?;
@@ -336,6 +411,13 @@ fn eval_call<C: EvalContext>(func: &str, args: &[Expr], ctx: &C) -> Result<f64, 
             let min = eval_expr(&args[1], ctx)?;
             let max = eval_expr(&args[2], ctx)?;
             Ok(v.clamp(min, max))
+        }
+        "lerp" => {
+            check_arg_count(func, args, 3)?;
+            let a = eval_expr(&args[0], ctx)?;
+            let b = eval_expr(&args[1], ctx)?;
+            let t = eval_expr(&args[2], ctx)?;
+            Ok(a + t * (b - a))
         }
         _ => Err(EvalError::UnknownFunction(func.to_string())),
     }

@@ -56,6 +56,7 @@ pub fn expr_to_c(
         ExprKind::Parameter(name) => match name.as_str() {
             "n" => Ok("((double)sys->n)".to_string()),
             "pi" | "PI" => Ok("3.14159265358979323846".to_string()),
+            "tau" | "TAU" => Ok("6.28318530717958647692".to_string()),
             "e" | "E" => Ok("2.71828182845904523536".to_string()),
             _ => {
                 if model.variables.contains_key(name) {
@@ -127,18 +128,34 @@ pub fn expr_to_c(
                 "sinh" => format!("sinh({})", c_args[0]),
                 "cosh" => format!("cosh({})", c_args[0]),
                 "atan" => format!("atan({})", c_args[0]),
+                "asin" => format!("asin({})", c_args[0]),
+                "acos" => format!("acos({})", c_args[0]),
                 "exp" => format!("exp({})", c_args[0]),
-                "log" => format!("log({})", c_args[0]),
+                "log" | "ln" => format!("log({})", c_args[0]),
+                "log10" => format!("log10({})", c_args[0]),
+                "log2" => format!("log2({})", c_args[0]),
                 "floor" => format!("floor({})", c_args[0]),
                 "ceil" => format!("ceil({})", c_args[0]),
                 "round" => format!("round({})", c_args[0]),
+                "sign" | "sgn" => format!(
+                    "(({}) > 0.0 ? 1.0 : (({}) < 0.0 ? -1.0 : 0.0))",
+                    c_args[0], c_args[0]
+                ),
+                "fract" => format!("(({}) - floor({}))", c_args[0], c_args[0]),
                 "min" => format!("fmin({}, {})", c_args[0], c_args[1]),
                 "max" => format!("fmax({}, {})", c_args[0], c_args[1]),
+                "atan2" => format!("atan2({}, {})", c_args[0], c_args[1]),
+                "hypot" => format!("hypot({}, {})", c_args[0], c_args[1]),
+                "step" => format!("(({}) >= ({}) ? 1.0 : 0.0)", c_args[1], c_args[0]),
                 "cond" => format!(
                     "(({}) != 0.0 ? ({}) : ({}))",
                     c_args[0], c_args[1], c_args[2]
                 ),
                 "clamp" => format!("fmin(fmax({}, {}), {})", c_args[0], c_args[1], c_args[2]),
+                "lerp" => format!(
+                    "(({}) + ({}) * (({}) - ({})))",
+                    c_args[0], c_args[2], c_args[1], c_args[0]
+                ),
                 _ => {
                     return Err(CodegenError::UnsupportedExpr(format!(
                         "Unknown function '{func}'"

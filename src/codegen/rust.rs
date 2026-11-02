@@ -57,6 +57,7 @@ pub fn expr_to_rust(
         ExprKind::Parameter(name) => match name.as_str() {
             "n" => Ok("(self.n as f64)".to_string()),
             "pi" | "PI" => Ok("std::f64::consts::PI".to_string()),
+            "tau" | "TAU" => Ok("std::f64::consts::TAU".to_string()),
             "e" | "E" => Ok("std::f64::consts::E".to_string()),
             _ => {
                 if model.variables.contains_key(name) {
@@ -136,13 +137,28 @@ pub fn expr_to_rust(
                 "sinh" => format!("({}).sinh()", rust_args[0]),
                 "cosh" => format!("({}).cosh()", rust_args[0]),
                 "atan" => format!("({}).atan()", rust_args[0]),
+                "asin" => format!("({}).asin()", rust_args[0]),
+                "acos" => format!("({}).acos()", rust_args[0]),
                 "exp" => format!("({}).exp()", rust_args[0]),
-                "log" => format!("({}).ln()", rust_args[0]),
+                "log" | "ln" => format!("({}).ln()", rust_args[0]),
+                "log10" => format!("({}).log10()", rust_args[0]),
+                "log2" => format!("({}).log2()", rust_args[0]),
                 "floor" => format!("({}).floor()", rust_args[0]),
                 "ceil" => format!("({}).ceil()", rust_args[0]),
                 "round" => format!("({}).round()", rust_args[0]),
+                "sign" | "sgn" => format!(
+                    "(if ({}) > 0.0 {{ 1.0 }} else if ({}) < 0.0 {{ -1.0 }} else {{ 0.0 }})",
+                    rust_args[0], rust_args[0]
+                ),
+                "fract" => format!("(({}) - ({}).floor())", rust_args[0], rust_args[0]),
                 "min" => format!("({}).min({})", rust_args[0], rust_args[1]),
                 "max" => format!("({}).max({})", rust_args[0], rust_args[1]),
+                "atan2" => format!("({}).atan2({})", rust_args[0], rust_args[1]),
+                "hypot" => format!("({}).hypot({})", rust_args[0], rust_args[1]),
+                "step" => format!(
+                    "(if ({}) >= ({}) {{ 1.0 }} else {{ 0.0 }})",
+                    rust_args[1], rust_args[0]
+                ),
                 "cond" => format!(
                     "(if ({}) != 0.0 {{ {} }} else {{ {} }})",
                     rust_args[0], rust_args[1], rust_args[2]
@@ -150,6 +166,10 @@ pub fn expr_to_rust(
                 "clamp" => format!(
                     "({}).clamp({}, {})",
                     rust_args[0], rust_args[1], rust_args[2]
+                ),
+                "lerp" => format!(
+                    "(({}) + ({}) * (({}) - ({})))",
+                    rust_args[0], rust_args[2], rust_args[1], rust_args[0]
                 ),
                 _ => {
                     return Err(CodegenError::UnsupportedExpr(format!(

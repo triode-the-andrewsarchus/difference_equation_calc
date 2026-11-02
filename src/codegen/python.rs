@@ -56,6 +56,7 @@ pub fn expr_to_py(
         ExprKind::Parameter(name) => match name.as_str() {
             "n" => Ok("float(self.n)".to_string()),
             "pi" | "PI" => Ok("math.pi".to_string()),
+            "tau" | "TAU" => Ok("math.tau".to_string()),
             "e" | "E" => Ok("math.e".to_string()),
             _ => {
                 if model.variables.contains_key(name) {
@@ -135,18 +136,34 @@ pub fn expr_to_py(
                 "sinh" => format!("math.sinh({})", py_args[0]),
                 "cosh" => format!("math.cosh({})", py_args[0]),
                 "atan" => format!("math.atan({})", py_args[0]),
+                "asin" => format!("math.asin({})", py_args[0]),
+                "acos" => format!("math.acos({})", py_args[0]),
                 "exp" => format!("math.exp({})", py_args[0]),
-                "log" => format!("math.log({})", py_args[0]),
+                "log" | "ln" => format!("math.log({})", py_args[0]),
+                "log10" => format!("math.log10({})", py_args[0]),
+                "log2" => format!("math.log2({})", py_args[0]),
                 "floor" => format!("float(math.floor({}))", py_args[0]),
                 "ceil" => format!("float(math.ceil({}))", py_args[0]),
                 "round" => format!("float(round({}))", py_args[0]),
+                "sign" | "sgn" => format!(
+                    "(1.0 if ({}) > 0.0 else (-1.0 if ({}) < 0.0 else 0.0))",
+                    py_args[0], py_args[0]
+                ),
+                "fract" => format!("(({}) - float(math.floor({})))", py_args[0], py_args[0]),
                 "min" => format!("min({}, {})", py_args[0], py_args[1]),
                 "max" => format!("max({}, {})", py_args[0], py_args[1]),
+                "atan2" => format!("math.atan2({}, {})", py_args[0], py_args[1]),
+                "hypot" => format!("math.hypot({}, {})", py_args[0], py_args[1]),
+                "step" => format!("(1.0 if ({}) >= ({}) else 0.0)", py_args[1], py_args[0]),
                 "cond" => format!(
                     "(({}) if ({}) != 0.0 else ({}))",
                     py_args[1], py_args[0], py_args[2]
                 ),
                 "clamp" => format!("min(max({}, {}), {})", py_args[0], py_args[1], py_args[2]),
+                "lerp" => format!(
+                    "(({}) + ({}) * (({}) - ({})))",
+                    py_args[0], py_args[2], py_args[1], py_args[0]
+                ),
                 _ => {
                     return Err(CodegenError::UnsupportedExpr(format!(
                         "Unknown function '{func}'"

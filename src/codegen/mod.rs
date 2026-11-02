@@ -94,7 +94,7 @@ impl SystemModel {
 
         let mut param_models = Vec::new();
         for p in &dep_info.referenced_parameters {
-            if p == "n" || p == "pi" || p == "PI" || p == "e" || p == "E" {
+            if matches!(p.as_str(), "n" | "pi" | "PI" | "tau" | "TAU" | "e" | "E") {
                 continue;
             }
             if variables.contains_key(p) {
